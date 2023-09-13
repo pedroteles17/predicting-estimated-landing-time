@@ -22,27 +22,11 @@ endpoints = [endpoint for endpoint in fetcher.ENDPOINTS if endpoint != "cat-62"]
 endpoints_data = {endpoint: pd.read_parquet(f"data/{endpoint}.parquet") for endpoint in endpoints}
 
 # %%
-endpoints_data["metar"]["metar"] = endpoints_data["metar"]["metar"].apply(lambda x: x.strip("="))
+endpoints_data["metaf"]["metaf"] = endpoints_data["metaf"]["metaf"].apply(lambda x: x.strip("\n").strip("="))
 
 parsed_metar = []
-for index, row in endpoints_data["metar"].iterrows():
-    metar_str = row["metar"]
-
-    metar_modifications = {}
-
-    report_elements = metar_str.split(" ")
-
-    if report_elements[-2] == "WS":
-        metar_str = " ".join(report_elements[:-2]).strip()
-        metar_modifications["ws"] = report_elements[-1]
-
-    if report_elements[1] == "COR":
-        metar_str = metar_str.replace("COR ", "")
-        metar_modifications["cor"] = True
-
-    if "/////////" in metar_str:
-        metar_str = metar_str.replace("/////////", "")
-        metar_modifications["missing_data"] = True
+for index, row in endpoints_data["metaf"].iterrows():
+    metar_str, modification_dict = MetarExtender.clean_metar_string(row["metaf"])
 
     try:
         obs = MetarExtender(metar_str)
@@ -53,9 +37,6 @@ for index, row in endpoints_data["metar"].iterrows():
 
     metar_dict["hora"] = row["hora"]
     metar_dict["aero"] = row["aero"]
+    metar_dict.update(modification_dict)
 
-    parsed_metar.append(metar_dict | metar_modifications)
-
-# %%
-MetarExtender("METAR SBSV 261900Z 12009KT CAVOK Q1015").get_metar_dict()
-# %%
+    parsed_metar.append(metar_dict)

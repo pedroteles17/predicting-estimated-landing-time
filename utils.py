@@ -32,17 +32,70 @@ class FetchData:
 class MetarExtender(Metar.Metar):
     def __init__(self, metar_str):
         super().__init__(metar_str)
+        self.metar_str = metar_str
 
     @staticmethod
-    def _clean_metar_string(metar_str):
-        metar_str = metar_str.replace("\n     ", ";")
+    def _metaf_to_metar(metaf_str):
+        if metaf_str.split(" ")[0] == "METAF":
+            return metaf_str.replace("METAF", "METAR"), True
+        
+        return metaf_str, False
 
+    @staticmethod
+    def _remove_cor(metar_str):
         if metar_str.split(" ")[1] == "COR":
-            metar_str = metar_str[6:]
+            return metar_str.replace("COR ", ""), True
+
+        return metar_str, False
+
+    @staticmethod
+    def _remove_missing_data(metar_str):
+        has_missing_data = False
+
+        # Regex to match Rxx///// or RxxL///// or RxxK/////
+        pattern = r'\bR\d{2}[A-Z]?/////[^ ]*\s*'
+
+        if re.search(pattern, metar_str):
+            metar_str = re.sub(pattern, '', metar_str)
+            has_missing_data = True
+
+        if "/////////" in metar_str:
+            metar_str = metar_str.replace("/////////", "")
+            has_missing_data = True
+
+        return metar_str, has_missing_data
+
+    @staticmethod
+    def _remove_ws(metar_str):
+        if metar_str.split(" ")[-2] == "WS":
+            metar_str = " ".join(metar_str.split(" ")[:-2]).strip()
+            ws_value = metar_str.split(" ")[-1]
+            return metar_str, ws_value
+
+        return metar_str, None
+
+    @staticmethod
+    def clean_metar_string(metar_str):
+        metar_str, cor = MetarExtender._remove_cor(metar_str)
+        metar_str, missing_data = MetarExtender._remove_missing_data(metar_str)
+        metar_str, ws_value = MetarExtender._remove_ws(metar_str)
+        metar_str, is_metaf = MetarExtender._metaf_to_metar(metar_str)
+
+        modification_dict = {
+            "correction": cor,
+            "missing_data": missing_data,
+            "wind_shear": ws_value,
+            "is_forecast": is_metaf
+        }
+
+        return metar_str, modification_dict
+
+    @staticmethod
+    def _remove_sky_extra_spaces(metar_str):
+        return metar_str.replace("\n     ", "")
 
     def get_metar_dict(self):
-        # sky_condition has a different format (\n     ) so we need to replace it
-        metar_lines = self.string().replace("\n     ", ";").split("\n")
+        metar_lines = self._remove_sky_extra_spaces(self.string()).split("\n")
 
         metar_dict = {}
         for line in metar_lines:

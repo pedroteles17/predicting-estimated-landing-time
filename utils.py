@@ -4,6 +4,45 @@ import pandas as pd
 import re
 import time
 from metar import Metar
+import openai
+import json
+
+class OpenAI:
+    # We did some prompt engineering to get the best results from OpenAI
+    METAR_PROMPT = """
+    Analyze METAR reports for aviation and rate flying conditions from 0 (hazardous) to 100 
+    (perfect) based on key meteorological parameters. Return the assessment in JSON format 
+    with an overall score and individual scores for: Wind, Visibility, Cloud Cover, 
+    Dew Point Spread, Altimeter Setting, Precipitation, Temperature. If data is insufficient 
+    for any category, return 'None'. Only the JSON should be returned.
+    """.replace("\n", " ")
+
+    def __init__(self, api_key):
+        openai.api_key = api_key
+
+    @staticmethod
+    def clean_openai_response(response):
+        try:
+            choices = response.choices[0]
+            content = choices.message['content']
+            return json.loads(content)
+        except (IndexError, KeyError, json.JSONDecodeError):
+            return None
+
+    def get_scores_for_metar(self, metar):
+        try:
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": self.METAR_PROMPT},
+                    {"role": "user", "content": metar}
+                ],
+                temperature=0.2,
+                top_p=0.8,
+            )
+            return self.clean_openai_response(response)
+        except:
+            return None
 
 class MergeDataSets:
     AIRPORT_COLUMN = "aero"

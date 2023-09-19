@@ -1,17 +1,17 @@
 #%%
 import pandas as pd
-import openai
 import dotenv
 import os
-from utils import FetchData, MetarExtender, MergeDataSets
+from utils import FetchData, MetarExtender, MergeDataSets, OpenAI
 from shapely.geometry import MultiPoint
 from shapely.wkt import loads
+import pickle
+from tqdm import tqdm
+import time
 
 dotenv.load_dotenv()
 
 api_token = os.getenv("API_TOKEN")
-
-openai.api_key = os.getenv("OPENAI_API_KEY")
 
 kaggle_test = pd.read_csv("idsc_test.csv")
 
@@ -83,30 +83,19 @@ final_df = final_df[["dt_arr"] + list(kaggle_test.columns)]
 metar_strings = list(set(list(final_df["metar"]) + list(final_df["metaf"])))
 
 metar_strings = [metar.strip("\n").strip("=") for metar in metar_strings if not pd.isna(metar)]
-# %%
-llm_prompt = """
-You are tasked with analyzing METAR reports for aviation purposes. 
-Your goal is to provide a comprehensive assessment of flying conditions on a 
-scale from 0 to 100, where 0 represents extremely hazardous conditions, 
-and 100 indicates perfect flying conditions. The assessment should be based on 
-key meteorological parameters. You are required to return this assessment in 
-JSON format, consisting of an overall score and individual scores for the following 
-categories: Wind, Visibility, Cloud Cover, Temperature/Dew Point Spread, and Altimeter 
-Setting. If there is insufficient data available for any specific category, 
-please return "None. You must return only the JSON, and nothing else.
-"""
 
+openai_caller = OpenAI(os.getenv("OPENAI_API_KEY"))
 
-response = openai.ChatCompletion.create(
-    model="gpt-4",
-    messages=[
-        {"role":"system", "content":llm_prompt},
-        {"role":"user", "content":metar_strings[0]}
-    ],
-    temperature=0
-)
+metar_scores = []
+for i in tqdm(range(len(metar_strings)), desc="Processing", unit="iteration"):
+    if i % 100 == 0:
+        with open("metar_scores.pickle", 'wb') as file:
+            pickle.dump(metar_scores, file)
 
-# %%
-import json
-json.loads(response.choices[0].to_dict_recursive()["message"]["content"])
-# %%
+    aux_dict = openai_caller.get_scores_for_metar(metar_strings[i])
+
+    aux_dict.update({"metar": metar_strings[i]})
+
+    metar_scores.append(aux_dict)
+
+#%%

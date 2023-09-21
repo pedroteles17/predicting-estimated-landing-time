@@ -1,13 +1,17 @@
 #%%
 import requests
 import pandas as pd
-import re
+import re # Regex
 import time
-from metar import Metar
-import openai
+from metar import Metar # METAR parsing library
+import openai # OpenAI API
 import json
+import aiofiles # Async file writing
+import asyncio # Async requests
+from tqdm import tqdm # Progress bar
+from shapely.geometry import Point, MultiPoint # Geospatial data
 
-class OpenAI:
+class OpenAIAsync:
     # We did some prompt engineering to get the best results from OpenAI
     METAR_PROMPT = """
     Analyze METAR reports for aviation and rate flying conditions from 0 (hazardous) to 100 
@@ -19,6 +23,7 @@ class OpenAI:
 
     def __init__(self, api_key):
         openai.api_key = api_key
+        self.results_dict = {}
 
     @staticmethod
     def clean_openai_response(response):
@@ -26,12 +31,35 @@ class OpenAI:
             choices = response.choices[0]
             content = choices.message['content']
             return json.loads(content)
-        except (IndexError, KeyError, json.JSONDecodeError):
+        except:
+            print("Error when cleaning: ", response)
             return None
 
-    def get_scores_for_metar(self, metar):
+    @staticmethod
+    async def save_to_file(data, filename):
         try:
-            response = openai.ChatCompletion.create(
+            async with aiofiles.open(filename, 'w') as file:
+                await file.write(json.dumps(data, indent=4))
+            print(f"Data saved to {filename}")
+        except Exception as e:
+            print(f"Error saving data to {filename}: {str(e)}")
+
+    async def main(self, metar_reports):
+        tasks = [self.fetch_scores_for_metar(metar) for metar in metar_reports]
+
+        print("Progress:")
+        for task in tqdm(asyncio.as_completed(tasks), total=len(tasks)):
+            await task
+
+        # Now, results_dict contains METAR data
+        print("\nFinished fetching data.")
+
+        # Save the results to a JSON file asynchronously
+        await self.save_to_file(self.results_dict, 'metar_results.json')
+
+    async def fetch_scores_for_metar(self, metar):
+        try:
+            response = await openai.ChatCompletion.acreate(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": self.METAR_PROMPT},
@@ -40,9 +68,12 @@ class OpenAI:
                 temperature=0.2,
                 top_p=0.8,
             )
-            return self.clean_openai_response(response)
-        except:
-            return None
+            metar_data = self.clean_openai_response(response)
+            self.results_dict[metar] = metar_data
+        except Exception as e:
+            print("Error:", e)
+        
+        await asyncio.sleep(0.5)
 
 class MergeDataSets:
     AIRPORT_COLUMN = "aero"
@@ -62,6 +93,31 @@ class MergeDataSets:
 
     def _ceil_departure_date(self):
         self.bimtra_df["dt_dep_ceiling"] = self.bimtra_df["dt_dep"].dt.ceil('H')
+
+    @staticmethod
+    def create_multipoint(group_df):
+        points = [f"({lat} {lon})" for lat, lon in zip(group_df['lat'], group_df['lon'])]
+        return f"MULTIPOINT ({', '.join(points)})"
+
+    def merge_with_cat_62(self, cat_62_df: pd.DataFrame) -> 'MergeDataSets':
+        self.bimtra_df["dt_dep_floor"] = self.bimtra_df["dt_dep"].dt.floor('min')
+
+        cat_62_df["dt_radar_ceil"] = cat_62_df["dt_radar"].dt.ceil('min')
+
+        # The same flight can have multiple radar reports, so we need to select the most recent one
+        cat_62_df = cat_62_df\
+            .sort_values(by=["dt_radar_ceil", "flightid", "dt_radar"], ascending=[True, True, False])\
+            .drop_duplicates(subset=["dt_radar_ceil", "flightid"], keep="first")
+
+        multipoints = cat_62_df.groupby("dt_radar_ceil").apply(self.create_multipoint)
+
+        multipoints = pd.DataFrame(multipoints).reset_index().rename(columns={0: "snapshot_radar"})                    
+
+        self.bimtra_df = self.bimtra_df.merge(
+            multipoints, left_on="dt_dep_floor", right_on="dt_radar_ceil", how="left", suffixes=("", "_cat")
+        ).drop(["dt_dep_floor", "dt_radar_ceil"], axis=1)
+
+        return self
 
     def merge_with_espera(self, wait_df: pd.DataFrame) -> 'MergeDataSets':
         # To merge, we must floor the departure date to the hour and lag it by one hour
@@ -161,20 +217,17 @@ class FetchData:
         response.raise_for_status()
         return pd.DataFrame(response.json())
 
-    def fetch_cat_62(self, start_date: str, end_date: str) -> pd.DataFrame:
-        date_range = pd.date_range(start=start_date, end=end_date, freq=f'2D')
+    def fetch_cat_62(self, date: pd._libs.tslibs.timestamps.Timestamp) -> pd.DataFrame:
+        # API has data each minute
+        start_date = (date - pd.Timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        end_date = date.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        try:
+            df = self.fetch_endpoint("cat-62", start_date, end_date)
+        except Exception as e:
+            print(f"Error fetching data for {date}: {e}")
+            return None
 
-        dfs = []
-        for date in date_range:
-            start_date = date.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            end_date = (date + pd.Timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            try:
-                dfs.append(self.fetch_endpoint("cat-62", start_date, end_date))
-            except Exception as e:
-                print(f"Error fetching data for {date}: {e}")
-
-        return pd.concat(dfs, ignore_index=True)
-        
+        return df
 
 class MetarExtender(Metar.Metar):
     def __init__(self, metar_str):

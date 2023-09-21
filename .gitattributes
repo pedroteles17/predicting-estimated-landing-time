@@ -2,3 +2,5 @@ cat-62.parquet filter=lfs diff=lfs merge=lfs -text
 data/cat-62.parquet filter=lfs diff=lfs merge=lfs -text
 your_large_file.ext filter=lfs diff=lfs merge=lfs -text
 data/clean_data.parquet filter=lfs diff=lfs merge=lfs -text
+data/original_files/cat-62.parquet filter=lfs diff=lfs merge=lfs -text
+data/feature_engineering/clean_data.parquet filter=lfs diff=lfs merge=lfs -text

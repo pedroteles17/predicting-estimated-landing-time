@@ -8,7 +8,7 @@ dotenv.load_dotenv()
 
 api_token = os.getenv("API_TOKEN")
 
-kaggle_test = pd.read_csv("idsc_test.csv")
+kaggle_test = pd.read_csv("data/original_files/idsc_test.csv")
 
 #%%
 start_date = "2022-06-01" # First Observation: 2022-06-01 
@@ -20,13 +20,13 @@ endpoints = [endpoint for endpoint in fetcher.ENDPOINTS if endpoint != "cat-62"]
 
 # Uncomment to fetch data from API
 ##endpoints_data = {endpoint: fetcher.fetch_endpoint(endpoint, start_date, end_date) for endpoint in endpoints}
-endpoints_data = {endpoint: pd.read_parquet(f"data/{endpoint}.parquet") for endpoint in endpoints}
+endpoints_data = {endpoint: pd.read_parquet(f"data/original_files/{endpoint}.parquet") for endpoint in endpoints}
 
 # Uncomment to fetch data from API (its a slow process, ~3 hours)
 ##date_range = pd.date_range(start=start_date, end=end_date, freq=f'1D')
 ##cat_62 = [fetcher.fetch_cat_62(date) for date in tqdm(date_range)]
 ##endpoints_data["cat-62"] = pd.concat(cat_62)
-endpoints_data["cat-62"] = pd.read_parquet("data/cat-62.parquet")
+endpoints_data["cat-62"] = pd.read_parquet("data/original_files/cat-62.parquet")
 
 # 'Troca de Cabeceira' (TC) is a runway change. For some reason, the API returns the runway code without the 'SB' prefix.
 endpoints_data["tc-prev"]["aero"] = "SB" + endpoints_data["tc-prev"]["aero"]
@@ -74,3 +74,8 @@ final_df = final_df.rename(
 
 # We ensure that our dataset has the same columns as the Kaggle test set
 final_df = final_df[["dt_arr"] + list(kaggle_test.columns)]
+
+# Save file to be used in the next steps
+final_df.to_parquet("data/feature_engineering/clean_data.parquet")
+
+#%%

@@ -7,7 +7,7 @@ import os
 dotenv.load_dotenv()
 
 if __name__ == "__main__":
-    with open("metar_strings.pickle", 'rb') as pickle_file:
+    with open("metar_strings.pickle", "rb") as pickle_file:
         metar_strings = pickle.load(pickle_file)
 
     openai_instance = OpenAIAsync(os.getenv("OPENAI_API_KEY"))

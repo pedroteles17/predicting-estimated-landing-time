@@ -1,15 +1,16 @@
-#%%
+# %%
 import requests
 import pandas as pd
-import re # Regex
+import re  # Regex
 import time
-from metar import Metar # METAR parsing library
-import openai # OpenAI API
+from metar import Metar  # METAR parsing library
+import openai  # OpenAI API
 import json
-import aiofiles # Async file writing
-import asyncio # Async requests
-from tqdm import tqdm # Progress bar
-from shapely.geometry import Point, MultiPoint # Geospatial data
+import aiofiles  # Async file writing
+import asyncio  # Async requests
+from tqdm import tqdm  # Progress bar
+from shapely.geometry import Point, MultiPoint  # Geospatial data
+
 
 class OpenAIAsync:
     # We did some prompt engineering to get the best results from OpenAI
@@ -19,7 +20,9 @@ class OpenAIAsync:
     with an overall score and individual scores for: Wind, Visibility, Cloud Cover, 
     Dew Point Spread, Altimeter Setting, Precipitation, Temperature. If data is insufficient 
     for any category, return 'None'. Only the JSON should be returned.
-    """.replace("\n", " ")
+    """.replace(
+        "\n", " "
+    )
 
     def __init__(self, api_key):
         openai.api_key = api_key
@@ -29,7 +32,7 @@ class OpenAIAsync:
     def clean_openai_response(response):
         try:
             choices = response.choices[0]
-            content = choices.message['content']
+            content = choices.message["content"]
             return json.loads(content)
         except:
             print("Error when cleaning: ", response)
@@ -38,7 +41,7 @@ class OpenAIAsync:
     @staticmethod
     async def save_to_file(data, filename):
         try:
-            async with aiofiles.open(filename, 'w') as file:
+            async with aiofiles.open(filename, "w") as file:
                 await file.write(json.dumps(data, indent=4))
             print(f"Data saved to {filename}")
         except Exception as e:
@@ -55,7 +58,7 @@ class OpenAIAsync:
         print("\nFinished fetching data.")
 
         # Save the results to a JSON file asynchronously
-        await self.save_to_file(self.results_dict, 'metar_results.json')
+        await self.save_to_file(self.results_dict, "metar_results.json")
 
     async def fetch_scores_for_metar(self, metar):
         try:
@@ -63,7 +66,7 @@ class OpenAIAsync:
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": self.METAR_PROMPT},
-                    {"role": "user", "content": metar}
+                    {"role": "user", "content": metar},
                 ],
                 temperature=0.2,
                 top_p=0.8,
@@ -72,8 +75,9 @@ class OpenAIAsync:
             self.results_dict[metar] = metar_data
         except Exception as e:
             print("Error:", e)
-        
+
         await asyncio.sleep(0.5)
+
 
 class MergeDataSets:
     AIRPORT_COLUMN = "aero"
@@ -85,110 +89,140 @@ class MergeDataSets:
     def _merge_dataframes(self, left_on_cols, right_df, suffixes):
         # Merge two dataframes and return the result
         return self.bimtra_df.merge(
-            right_df, left_on=left_on_cols, right_on=[self.AIRPORT_COLUMN, self.HOUR_COLUMN], how="left", suffixes=suffixes
+            right_df,
+            left_on=left_on_cols,
+            right_on=[self.AIRPORT_COLUMN, self.HOUR_COLUMN],
+            how="left",
+            suffixes=suffixes,
         )
 
     def _floor_departure_date(self):
-        self.bimtra_df["dt_dep_floor"] = self.bimtra_df["dt_dep"].dt.floor('H')
+        self.bimtra_df["dt_dep_floor"] = self.bimtra_df["dt_dep"].dt.floor("H")
 
     def _ceil_departure_date(self):
-        self.bimtra_df["dt_dep_ceiling"] = self.bimtra_df["dt_dep"].dt.ceil('H')
+        self.bimtra_df["dt_dep_ceiling"] = self.bimtra_df["dt_dep"].dt.ceil("H")
 
     @staticmethod
     def create_multipoint(group_df):
-        points = [f"({lat} {lon})" for lat, lon in zip(group_df['lat'], group_df['lon'])]
+        points = [
+            f"({lat} {lon})" for lat, lon in zip(group_df["lat"], group_df["lon"])
+        ]
         return f"MULTIPOINT ({', '.join(points)})"
 
-    def merge_with_cat_62(self, cat_62_df: pd.DataFrame) -> 'MergeDataSets':
-        self.bimtra_df["dt_dep_floor"] = self.bimtra_df["dt_dep"].dt.floor('min')
+    def merge_with_cat_62(self, cat_62_df: pd.DataFrame) -> "MergeDataSets":
+        self.bimtra_df["dt_dep_floor"] = self.bimtra_df["dt_dep"].dt.floor("min")
 
-        cat_62_df["dt_radar_ceil"] = cat_62_df["dt_radar"].dt.ceil('min')
+        cat_62_df["dt_radar_ceil"] = cat_62_df["dt_radar"].dt.ceil("min")
 
         # The same flight can have multiple radar reports, so we need to select the most recent one
-        cat_62_df = cat_62_df\
-            .sort_values(by=["dt_radar_ceil", "flightid", "dt_radar"], ascending=[True, True, False])\
-            .drop_duplicates(subset=["dt_radar_ceil", "flightid"], keep="first")
+        cat_62_df = cat_62_df.sort_values(
+            by=["dt_radar_ceil", "flightid", "dt_radar"], ascending=[True, True, False]
+        ).drop_duplicates(subset=["dt_radar_ceil", "flightid"], keep="first")
 
         multipoints = cat_62_df.groupby("dt_radar_ceil").apply(self.create_multipoint)
 
-        multipoints = pd.DataFrame(multipoints).reset_index().rename(columns={0: "snapshot_radar"})                    
+        multipoints = (
+            pd.DataFrame(multipoints)
+            .reset_index()
+            .rename(columns={0: "snapshot_radar"})
+        )
 
         self.bimtra_df = self.bimtra_df.merge(
-            multipoints, left_on="dt_dep_floor", right_on="dt_radar_ceil", how="left", suffixes=("", "_cat")
+            multipoints,
+            left_on="dt_dep_floor",
+            right_on="dt_radar_ceil",
+            how="left",
+            suffixes=("", "_cat"),
         ).drop(["dt_dep_floor", "dt_radar_ceil"], axis=1)
 
         return self
 
-    def merge_with_espera(self, wait_df: pd.DataFrame) -> 'MergeDataSets':
+    def merge_with_espera(self, wait_df: pd.DataFrame) -> "MergeDataSets":
         # To merge, we must floor the departure date to the hour and lag it by one hour
         self._floor_departure_date()
-        self.bimtra_df["dt_dep_floor"] = self.bimtra_df["dt_dep_floor"] - pd.to_timedelta(1, unit='h')
+        self.bimtra_df["dt_dep_floor"] = self.bimtra_df[
+            "dt_dep_floor"
+        ] - pd.to_timedelta(1, unit="h")
 
         self.bimtra_df = self._merge_dataframes(
             left_on_cols=["destino", "dt_dep_floor"],
             right_df=wait_df,
-            suffixes=("", "_esperas")
+            suffixes=("", "_esperas"),
         ).drop("dt_dep_floor", axis=1)
-        
+
         return self
 
-    def merge_with_metaf(self, metaf_df: pd.DataFrame) -> 'MergeDataSets':
+    def merge_with_metaf(self, metaf_df: pd.DataFrame) -> "MergeDataSets":
         self._ceil_departure_date()
 
         self.bimtra_df = self._merge_dataframes(
             left_on_cols=["destino", "dt_dep_ceiling"],
             right_df=metaf_df,
-            suffixes=("", "_metaf")
+            suffixes=("", "_metaf"),
         ).drop("dt_dep_ceiling", axis=1)
-        
+
         return self
 
-    def merge_with_metar(self, metar_df: pd.DataFrame) -> 'MergeDataSets':
+    def merge_with_metar(self, metar_df: pd.DataFrame) -> "MergeDataSets":
         self._floor_departure_date()
 
         self.bimtra_df = self._merge_dataframes(
             left_on_cols=["destino", "dt_dep_floor"],
             right_df=metar_df,
-            suffixes=("", "_metar")
+            suffixes=("", "_metar"),
         ).drop("dt_dep_floor", axis=1)
-        
+
         return self
 
-    def merge_with_tc_prev(self, tc_prev: pd.DataFrame) -> 'MergeDataSets':
+    def merge_with_tc_prev(self, tc_prev: pd.DataFrame) -> "MergeDataSets":
         self._ceil_departure_date()
 
         self.bimtra_df = self._merge_dataframes(
             left_on_cols=["destino", "dt_dep_ceiling"],
             right_df=tc_prev,
-            suffixes=("", "_tcp")
+            suffixes=("", "_tcp"),
         ).drop("dt_dep_ceiling", axis=1)
-        
+
         return self
 
-    def merge_with_tc_real(self, tc_real: pd.DataFrame) -> 'MergeDataSets':
+    def merge_with_tc_real(self, tc_real: pd.DataFrame) -> "MergeDataSets":
         self._floor_departure_date()
 
-        tc_real["hora"] = tc_real["hora"].dt.floor('H')
+        tc_real["hora"] = tc_real["hora"].dt.floor("H")
 
         self.bimtra_df = self._merge_dataframes(
             left_on_cols=["destino", "dt_dep_floor"],
             right_df=tc_real,
-            suffixes=("", "_tcr")
+            suffixes=("", "_tcr"),
         ).drop("dt_dep_floor", axis=1)
-        
+
         return self
 
-    def merge_with_satelite(self, satelite: pd.DataFrame) -> 'MergeDataSets':
+    def merge_with_satelite(self, satelite: pd.DataFrame) -> "MergeDataSets":
         self._floor_departure_date()
 
         self.bimtra_df = self.bimtra_df.merge(
-            satelite, left_on="dt_dep_floor", right_on="hora", how="left", suffixes=("", "_sat")
+            satelite,
+            left_on="dt_dep_floor",
+            right_on="hora",
+            how="left",
+            suffixes=("", "_sat"),
         ).drop("dt_dep_floor", axis=1)
-        
+
         return self
 
+
 class FetchData:
-    ENDPOINTS = ["bimtra", "cat-62", "esperas", "metaf", "metar", "satelite", "tc-prev", "tc-real"]
+    ENDPOINTS = [
+        "bimtra",
+        "cat-62",
+        "esperas",
+        "metaf",
+        "metar",
+        "satelite",
+        "tc-prev",
+        "tc-real",
+    ]
     BASE_URL = "http://montreal.icea.decea.mil.br:5002/api/v1/"
     VALID_DATE_FORMATS = {
         "cat-62": r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$",
@@ -202,15 +236,27 @@ class FetchData:
     def _is_valid_date_format(pattern: str, date: str) -> bool:
         return bool(re.match(pattern, date))
 
-    def fetch_endpoint(self, endpoint: str, start_date: str, end_date: str) -> pd.DataFrame:
+    def fetch_endpoint(
+        self, endpoint: str, start_date: str, end_date: str
+    ) -> pd.DataFrame:
         time.sleep(10)
         if endpoint not in self.ENDPOINTS:
-            raise ValueError(f"Endpoint not recognized. Must be one of {', '.join(self.ENDPOINTS)}")
+            raise ValueError(
+                f"Endpoint not recognized. Must be one of {', '.join(self.ENDPOINTS)}"
+            )
 
-        date_format = self.VALID_DATE_FORMATS["cat-62"] if endpoint == "cat-62" else self.VALID_DATE_FORMATS["other"]
+        date_format = (
+            self.VALID_DATE_FORMATS["cat-62"]
+            if endpoint == "cat-62"
+            else self.VALID_DATE_FORMATS["other"]
+        )
 
-        if not self._is_valid_date_format(date_format, start_date) or not self._is_valid_date_format(date_format, end_date):
-            raise ValueError(f"Start and end dates must be in the right format ({date_format}).")
+        if not self._is_valid_date_format(
+            date_format, start_date
+        ) or not self._is_valid_date_format(date_format, end_date):
+            raise ValueError(
+                f"Start and end dates must be in the right format ({date_format})."
+            )
 
         url = f"{self.BASE_URL}{endpoint}?token={self.api_token}&idate={start_date}&fdate={end_date}"
         response = requests.get(url)
@@ -229,6 +275,7 @@ class FetchData:
 
         return df
 
+
 class MetarExtender(Metar.Metar):
     def __init__(self, metar_str):
         super().__init__(metar_str)
@@ -238,7 +285,7 @@ class MetarExtender(Metar.Metar):
     def _metaf_to_metar(metaf_str):
         if metaf_str.split(" ")[0] == "METAF":
             return metaf_str.replace("METAF", "METAR"), True
-        
+
         return metaf_str, False
 
     @staticmethod
@@ -253,10 +300,10 @@ class MetarExtender(Metar.Metar):
         has_missing_data = False
 
         # Regex to match Rxx///// or RxxL///// or RxxK/////
-        pattern = r'\bR\d{2}[A-Z]?/////[^ ]*\s*'
+        pattern = r"\bR\d{2}[A-Z]?/////[^ ]*\s*"
 
         if re.search(pattern, metar_str):
-            metar_str = re.sub(pattern, '', metar_str)
+            metar_str = re.sub(pattern, "", metar_str)
             has_missing_data = True
 
         if "/////////" in metar_str:
@@ -285,7 +332,7 @@ class MetarExtender(Metar.Metar):
             "correction": cor,
             "missing_data": missing_data,
             "wind_shear": ws_value,
-            "is_forecast": is_metaf
+            "is_forecast": is_metaf,
         }
 
         return metar_str, modification_dict

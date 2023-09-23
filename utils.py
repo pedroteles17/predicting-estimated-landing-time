@@ -11,6 +11,40 @@ import asyncio  # Async requests
 from tqdm import tqdm  # Progress bar
 from shapely.geometry import Point, MultiPoint  # Geospatial data
 
+class FillMissingValues:
+    @staticmethod
+    def fill_snapshot_radar(df: pd.DataFrame, cat_62: pd.DataFrame, minutes_lag : int) -> pd.DataFrame:
+        for _, row in tqdm(df.iterrows(), total = df.shape[0]):
+            if not row["snapshot_radar"]:
+                start_date = row["dt_dep"] - pd.Timedelta(minutes=minutes_lag)
+                relevant_cat_62 = cat_62[(cat_62["dt_radar"] >= start_date) & (cat_62["dt_radar"] <= row["dt_dep"])]
+
+                # The same flight can have multiple radar reports, so we need to select the most recent one
+                relevant_cat_62 = relevant_cat_62.sort_values(
+                    by=["flightid", "dt_radar"], ascending=[True, False]
+                ).drop_duplicates(subset=["flightid"], keep="first")
+
+                if not relevant_cat_62.empty:
+                    multipoints = MergeDataSets.create_multipoint(relevant_cat_62)
+                    df.at[row.name, "snapshot_radar"] = multipoints
+
+        return df
+    
+    @staticmethod
+    def fill_path(df: pd.DataFrame, satelite: pd.DataFrame, hours_lag : int) -> pd.DataFrame:
+        for _, row in tqdm(df.loc[:1000].iterrows(), total = df.shape[0]):
+            if not row["path"]:
+                end_date = row["dt_dep"].floor("H")
+                start_date = end_date - pd.Timedelta(hours=hours_lag)
+
+                relevant_satelite = satelite[(satelite["data"] >= start_date) & (satelite["data"] <= end_date)]
+
+                if not relevant_satelite.empty:
+                    relevant_satelite = relevant_satelite.sort_values(by="data", ascending=False).reset_index(drop=True)
+                    df.at[row.name, "path"] = relevant_satelite["path"][0]
+
+        return df
+
 
 class OpenAIAsync:
     # We did some prompt engineering to get the best results from OpenAI
@@ -103,9 +137,9 @@ class MergeDataSets:
         self.bimtra_df["dt_dep_ceiling"] = self.bimtra_df["dt_dep"].dt.ceil("H")
 
     @staticmethod
-    def create_multipoint(group_df):
+    def create_multipoint(df):
         points = [
-            f"({lat} {lon})" for lat, lon in zip(group_df["lat"], group_df["lon"])
+            f"({lat} {lon})" for lat, lon in zip(df["lat"], df["lon"])
         ]
         return f"MULTIPOINT ({', '.join(points)})"
 

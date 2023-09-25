@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import re  # Regex
 import time
+import os
 from metar import Metar  # METAR parsing library
 import openai  # OpenAI API
 import json
@@ -12,10 +13,31 @@ from tqdm import tqdm  # Progress bar
 from shapely.geometry import Point, MultiPoint  # Geospatial data
 
 class FillMissingValues:
-    @staticmethod
-    def fill_snapshot_radar(df: pd.DataFrame, cat_62: pd.DataFrame, minutes_lag : int) -> pd.DataFrame:
-        for _, row in tqdm(df.iterrows(), total = df.shape[0]):
-            if not row["snapshot_radar"]:
+    def __init__(self, df: pd.DataFrame):
+        self.df = df.copy()
+
+    def fill_metar(self, metar: pd.DataFrame, hours_lag: int) -> "FillMissingValues":
+        for _, row in tqdm(self.df.iterrows(), total = self.df.shape[0], desc = "Filling metar"):
+            if pd.isna(row["metar"]):
+                end_date = row["dt_dep"].floor("H")
+                start_date = end_date - pd.Timedelta(hours=hours_lag)
+
+                relevant_metar = metar[
+                    (metar["hora"] >= start_date) & (metar["hora"] <= end_date) &
+                      (metar["aero"] == row["destino"])
+                ]
+
+                if not relevant_metar.empty:
+                    relevant_metar = relevant_metar.sort_values(by="hora", ascending=False).reset_index(drop=True)
+                    self.df.at[row.name, "metar"] = relevant_metar["metar"][0]
+                    self.df.at[row.name, "hora_metar"] = relevant_metar["hora"][0]
+                    self.df.at[row.name, "aero_metar"] = relevant_metar["aero"][0]
+
+        return self
+
+    def fill_snapshot_radar(self, cat_62: pd.DataFrame, minutes_lag : int) -> "FillMissingValues":
+        for _, row in tqdm(self.df.iterrows(), total = self.df.shape[0], desc = "Filling snapshot_radar"):
+            if pd.isna(row["snapshot_radar"]):
                 start_date = row["dt_dep"] - pd.Timedelta(minutes=minutes_lag)
                 relevant_cat_62 = cat_62[(cat_62["dt_radar"] >= start_date) & (cat_62["dt_radar"] <= row["dt_dep"])]
 
@@ -26,24 +48,24 @@ class FillMissingValues:
 
                 if not relevant_cat_62.empty:
                     multipoints = MergeDataSets.create_multipoint(relevant_cat_62)
-                    df.at[row.name, "snapshot_radar"] = multipoints
+                    self.df.at[row.name, "snapshot_radar"] = multipoints
 
-        return df
+        return self
     
-    @staticmethod
-    def fill_path(df: pd.DataFrame, satelite: pd.DataFrame, hours_lag : int) -> pd.DataFrame:
-        for _, row in tqdm(df.loc[:1000].iterrows(), total = df.shape[0]):
-            if not row["path"]:
+    def fill_path(self, satelite: pd.DataFrame, hours_lag : int) -> "FillMissingValues":
+        for _, row in tqdm(self.df.iterrows(), total = self.df.shape[0], desc = "Filling path"):
+            if pd.isna(row["path"]):
                 end_date = row["dt_dep"].floor("H")
                 start_date = end_date - pd.Timedelta(hours=hours_lag)
 
-                relevant_satelite = satelite[(satelite["data"] >= start_date) & (satelite["data"] <= end_date)]
+                relevant_satelite = satelite[(satelite["hora"] >= start_date) & (satelite["hora"] <= end_date)]
 
                 if not relevant_satelite.empty:
-                    relevant_satelite = relevant_satelite.sort_values(by="data", ascending=False).reset_index(drop=True)
-                    df.at[row.name, "path"] = relevant_satelite["path"][0]
+                    relevant_satelite = relevant_satelite.sort_values(by="hora", ascending=False).reset_index(drop=True)
+                    self.df.at[row.name, "path"] = relevant_satelite["path"][0]
+                    self.df.at[row.name, "hora_ref"] = relevant_satelite["hora"][0]
 
-        return df
+        return self
 
 
 class OpenAIAsync:
@@ -81,18 +103,36 @@ class OpenAIAsync:
         except Exception as e:
             print(f"Error saving data to {filename}: {str(e)}")
 
-    async def main(self, metar_reports):
+    @staticmethod
+    def delete_old_file(directory, filename):
+        file_path = os.path.join(directory, filename)
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception as e:
+                print(f"Error deleting file {file_path}: {str(e)}")
+
+    async def main(self, metar_reports, output_directory, save_interval):
         tasks = [self.fetch_scores_for_metar(metar) for metar in metar_reports]
 
         print("Progress:")
-        for task in tqdm(asyncio.as_completed(tasks), total=len(tasks)):
+        counter = 0
+        for task in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Fetching scores from LLM"):
             await task
+            counter += 1
+            if counter % save_interval == 0:
+                # Save the results to a JSON file asynchronously every X iterations
+                await self.save_to_file(self.results_dict, f"{output_directory}/metar_results_{counter}.json")
+                # Delete the file from 3 iterations ago. This is to avoid filling up the disk
+                self.delete_old_file(output_directory, f"metar_results_{counter - (save_interval*3)}.json")
+            
+            await asyncio.sleep(0.5)
 
         # Now, results_dict contains METAR data
         print("\nFinished fetching data.")
 
         # Save the results to a JSON file asynchronously
-        await self.save_to_file(self.results_dict, "metar_results.json")
+        await self.save_to_file(self.results_dict, f"{output_directory}/metar_results.json")
 
     async def fetch_scores_for_metar(self, metar):
         try:
@@ -110,15 +150,12 @@ class OpenAIAsync:
         except Exception as e:
             print("Error:", e)
 
-        await asyncio.sleep(0.5)
-
-
 class MergeDataSets:
     AIRPORT_COLUMN = "aero"
     HOUR_COLUMN = "hora"
 
     def __init__(self, bimtra_df: pd.DataFrame):
-        self.bimtra_df = bimtra_df
+        self.bimtra_df = bimtra_df.copy()
 
     def _merge_dataframes(self, left_on_cols, right_df, suffixes):
         # Merge two dataframes and return the result
@@ -223,6 +260,9 @@ class MergeDataSets:
         self._floor_departure_date()
 
         tc_real["hora"] = tc_real["hora"].dt.floor("H")
+
+        # Drop duplicates by airport and hour floor
+        tc_real = tc_real.drop_duplicates(subset=["aero", "hora"])
 
         self.bimtra_df = self._merge_dataframes(
             left_on_cols=["destino", "dt_dep_floor"],

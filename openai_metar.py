@@ -7,7 +7,7 @@ import os
 dotenv.load_dotenv()
 
 if __name__ == "__main__":
-    with open("metar_strings.pickle", "rb") as pickle_file:
+    with open("data/feature_engineering/metar_strings.pickle", "rb") as pickle_file:
         metar_strings = pickle.load(pickle_file)
 
     openai_instance = OpenAIAsync(os.getenv("OPENAI_API_KEY"))
@@ -15,4 +15,6 @@ if __name__ == "__main__":
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    loop.run_until_complete(openai_instance.main(metar_strings))
+    loop.run_until_complete(openai_instance.main(
+        metar_strings[:500], output_directory="data/metar_scores_llm", save_interval=100
+    ))

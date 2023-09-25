@@ -2,7 +2,7 @@
 import pandas as pd
 import dotenv
 import os
-from utils import FetchData, MergeDataSets
+from utils import FetchData, MergeDataSets, FillMissingValues
 
 dotenv.load_dotenv()
 
@@ -63,16 +63,33 @@ for key, value in endpoints_data.items():
         endpoints_data[key][timestamp_column], unit="ms"
     )
 
+#%%
+# We have some duplicated rows. We will drop them.
+endpoints_data["bimtra"] = endpoints_data["bimtra"].drop_duplicates()
+
+## We have some special reports (SPECI) in the data. If there are collisions, we will keep the SPECI report.
+### The sorting will ensure that the SPECI reports are the first ones in case of collision.
+endpoints_data["metar"] = endpoints_data["metar"]\
+    .sort_values(by=["hora", "aero", "metar"], ascending=[True, True, False])\
+    .drop_duplicates(subset=["hora", "aero"], keep="first")
+
+## Handling Duplicate Rows in cat-62 Data
+## Keep the first occurrence for each flight, prioritizing rows with flight level data.
+## 81082ac7e863447586383829cc6aae2e, for example, has very different locaitons for the same time.
+endpoints_data["cat-62"] = endpoints_data["cat-62"]\
+    .sort_values(by=["dt_radar", "flightid", "flightlevel"], ascending=[True, True, False])\
+    .drop_duplicates(subset=["dt_radar", "flightid"], keep="first")
+
 # %%
 merger = (
     MergeDataSets(endpoints_data["bimtra"])
     .merge_with_espera(endpoints_data["esperas"])
     .merge_with_metaf(endpoints_data["metaf"])
     .merge_with_metar(endpoints_data["metar"])
-    .merge_with_tc_prev(endpoints_data["tc-prev"])
-    .merge_with_tc_real(endpoints_data["tc-real"])
+    .merge_with_tc_prev(endpoints_data["tc-prev"].copy())
+    .merge_with_tc_real(endpoints_data["tc-real"].copy())
     .merge_with_satelite(endpoints_data["satelite"])
-    .merge_with_cat_62(endpoints_data["cat-62"])
+    .merge_with_cat_62(endpoints_data["cat-62"].copy())
 )
 
 final_df = merger.bimtra_df
@@ -84,7 +101,33 @@ final_df = final_df.rename(
 # We ensure that our dataset has the same columns as the Kaggle test set
 final_df = final_df[["dt_arr"] + list(kaggle_test.columns)]
 
+#%%
+# Fill missing values
+missing_values_filler = FillMissingValues(final_df)
+
+missing_values_filler\
+    .fill_snapshot_radar(endpoints_data["cat-62"].copy(), minutes_lag=10)\
+    .fill_path(endpoints_data["satelite"].copy(), hours_lag=6)\
+    .fill_metar(endpoints_data["metar"].copy(), hours_lag=6)
+
+# %%
+final_df = missing_values_filler.df.sort_values(by=["dt_dep", "flightid"])
+
 # Save file to be used in the next steps
 final_df.to_parquet("data/feature_engineering/clean_data.parquet")
+
+#%%
+import json
+
+# Specify the path to your JSON file
+json_file_path = "data/metar_scores_llm/metar_results_650.json"
+
+# Open the JSON file for reading
+with open(json_file_path, "r") as json_file:
+    # Parse the JSON data
+    data = json.load(json_file)
+
+# Now, 'data' contains the contents of the JSON file as a Python dictionary
+len(data)
 
 # %%

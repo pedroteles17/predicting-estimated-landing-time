@@ -12,34 +12,47 @@ import asyncio  # Async requests
 from tqdm import tqdm  # Progress bar
 from shapely.geometry import Point, MultiPoint  # Geospatial data
 
+
 class FillMissingValues:
     def __init__(self, df: pd.DataFrame):
         self.df = df.copy()
 
     def fill_metar(self, metar: pd.DataFrame, hours_lag: int) -> "FillMissingValues":
-        for _, row in tqdm(self.df.iterrows(), total = self.df.shape[0], desc = "Filling metar"):
+        for _, row in tqdm(
+            self.df.iterrows(), total=self.df.shape[0], desc="Filling metar"
+        ):
             if pd.isna(row["metar"]):
                 end_date = row["dt_dep"].floor("H")
                 start_date = end_date - pd.Timedelta(hours=hours_lag)
 
                 relevant_metar = metar[
-                    (metar["hora"] >= start_date) & (metar["hora"] <= end_date) &
-                      (metar["aero"] == row["destino"])
+                    (metar["hora"] >= start_date)
+                    & (metar["hora"] <= end_date)
+                    & (metar["aero"] == row["destino"])
                 ]
 
                 if not relevant_metar.empty:
-                    relevant_metar = relevant_metar.sort_values(by="hora", ascending=False).reset_index(drop=True)
+                    relevant_metar = relevant_metar.sort_values(
+                        by="hora", ascending=False
+                    ).reset_index(drop=True)
                     self.df.at[row.name, "metar"] = relevant_metar["metar"][0]
                     self.df.at[row.name, "hora_metar"] = relevant_metar["hora"][0]
                     self.df.at[row.name, "aero_metar"] = relevant_metar["aero"][0]
 
         return self
 
-    def fill_snapshot_radar(self, cat_62: pd.DataFrame, minutes_lag : int) -> "FillMissingValues":
-        for _, row in tqdm(self.df.iterrows(), total = self.df.shape[0], desc = "Filling snapshot_radar"):
+    def fill_snapshot_radar(
+        self, cat_62: pd.DataFrame, minutes_lag: int
+    ) -> "FillMissingValues":
+        for _, row in tqdm(
+            self.df.iterrows(), total=self.df.shape[0], desc="Filling snapshot_radar"
+        ):
             if pd.isna(row["snapshot_radar"]):
                 start_date = row["dt_dep"] - pd.Timedelta(minutes=minutes_lag)
-                relevant_cat_62 = cat_62[(cat_62["dt_radar"] >= start_date) & (cat_62["dt_radar"] <= row["dt_dep"])]
+                relevant_cat_62 = cat_62[
+                    (cat_62["dt_radar"] >= start_date)
+                    & (cat_62["dt_radar"] <= row["dt_dep"])
+                ]
 
                 # The same flight can have multiple radar reports, so we need to select the most recent one
                 relevant_cat_62 = relevant_cat_62.sort_values(
@@ -51,17 +64,23 @@ class FillMissingValues:
                     self.df.at[row.name, "snapshot_radar"] = multipoints
 
         return self
-    
-    def fill_path(self, satelite: pd.DataFrame, hours_lag : int) -> "FillMissingValues":
-        for _, row in tqdm(self.df.iterrows(), total = self.df.shape[0], desc = "Filling path"):
+
+    def fill_path(self, satelite: pd.DataFrame, hours_lag: int) -> "FillMissingValues":
+        for _, row in tqdm(
+            self.df.iterrows(), total=self.df.shape[0], desc="Filling path"
+        ):
             if pd.isna(row["path"]):
                 end_date = row["dt_dep"].floor("H")
                 start_date = end_date - pd.Timedelta(hours=hours_lag)
 
-                relevant_satelite = satelite[(satelite["hora"] >= start_date) & (satelite["hora"] <= end_date)]
+                relevant_satelite = satelite[
+                    (satelite["hora"] >= start_date) & (satelite["hora"] <= end_date)
+                ]
 
                 if not relevant_satelite.empty:
-                    relevant_satelite = relevant_satelite.sort_values(by="hora", ascending=False).reset_index(drop=True)
+                    relevant_satelite = relevant_satelite.sort_values(
+                        by="hora", ascending=False
+                    ).reset_index(drop=True)
                     self.df.at[row.name, "path"] = relevant_satelite["path"][0]
                     self.df.at[row.name, "hora_ref"] = relevant_satelite["hora"][0]
 
@@ -117,22 +136,34 @@ class OpenAIAsync:
 
         print("Progress:")
         counter = 0
-        for task in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Fetching scores from LLM"):
+        for task in tqdm(
+            asyncio.as_completed(tasks),
+            total=len(tasks),
+            desc="Fetching scores from LLM",
+        ):
             await task
             counter += 1
             if counter % save_interval == 0:
                 # Save the results to a JSON file asynchronously every X iterations
-                await self.save_to_file(self.results_dict, f"{output_directory}/metar_results_{counter}.json")
+                await self.save_to_file(
+                    self.results_dict,
+                    f"{output_directory}/metar_results_{counter}.json",
+                )
                 # Delete the file from 3 iterations ago. This is to avoid filling up the disk
-                self.delete_old_file(output_directory, f"metar_results_{counter - (save_interval*3)}.json")
-            
+                self.delete_old_file(
+                    output_directory,
+                    f"metar_results_{counter - (save_interval*3)}.json",
+                )
+
             await asyncio.sleep(0.5)
 
         # Now, results_dict contains METAR data
         print("\nFinished fetching data.")
 
         # Save the results to a JSON file asynchronously
-        await self.save_to_file(self.results_dict, f"{output_directory}/metar_results.json")
+        await self.save_to_file(
+            self.results_dict, f"{output_directory}/metar_results.json"
+        )
 
     async def fetch_scores_for_metar(self, metar):
         try:
@@ -149,6 +180,7 @@ class OpenAIAsync:
             self.results_dict[metar] = metar_data
         except Exception as e:
             print("Error:", e)
+
 
 class MergeDataSets:
     AIRPORT_COLUMN = "aero"
@@ -175,9 +207,7 @@ class MergeDataSets:
 
     @staticmethod
     def create_multipoint(df):
-        points = [
-            f"({lat} {lon})" for lat, lon in zip(df["lat"], df["lon"])
-        ]
+        points = [f"({lat} {lon})" for lat, lon in zip(df["lat"], df["lon"])]
         return f"MULTIPOINT ({', '.join(points)})"
 
     def merge_with_cat_62(self, cat_62_df: pd.DataFrame) -> "MergeDataSets":

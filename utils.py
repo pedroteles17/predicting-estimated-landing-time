@@ -1,6 +1,7 @@
 # %%
 import requests
 import pandas as pd
+import numpy as np
 import re  # Regex
 import time
 import os
@@ -12,6 +13,10 @@ import asyncio  # Async requests
 from tqdm import tqdm  # Progress bar
 from shapely.geometry import Point, MultiPoint  # Geospatial data
 
+def cyclical_features_to_sin_cos(time_list, max_val: int) -> pd.DataFrame:
+    sin = np.sin(2 * np.pi * time_list / max_val)
+    cos = np.cos(2 * np.pi * time_list / max_val)
+    return sin, cos
 
 class FillMissingValues:
     def __init__(self, df: pd.DataFrame):
@@ -93,7 +98,7 @@ class OpenAIAsync:
     Analyze METAR reports for aviation and rate flying conditions from 0 (hazardous) to 100 
     (perfect) based on key meteorological parameters. Return the assessment in JSON format 
     with an overall score and individual scores for: Wind, Visibility, Cloud Cover, 
-    Dew Point Spread, Altimeter Setting, Precipitation, Temperature. If data is insufficient 
+    Dew Point Spread, Altimeter Setting, Temperature. If data is insufficient 
     for any category, return 'None'. Only the JSON should be returned.
     """.replace(
         "\n", " "
@@ -155,7 +160,7 @@ class OpenAIAsync:
                     f"metar_results_{counter - (save_interval*3)}.json",
                 )
 
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
 
         # Now, results_dict contains METAR data
         print("\nFinished fetching data.")
@@ -378,12 +383,28 @@ class FetchData:
             return None
 
         return df
+    
+def parse_metars(metar_strings):
+    parsed_metar = []
+    for metar_str in tqdm(metar_strings, total=len(metar_strings), desc="Parsing METARs"):
+        clean_metar_str, _ = MetarExtender.clean_metar_string(metar_str)
 
+        try:
+            obs = MetarExtender(clean_metar_str)
+            metar_dict = MetarExtender.clean_metar_dict(obs.get_metar_dict())
+        except:
+            print(f"Error parsing METAR: {metar_str}")
+            continue
+
+        metar_dict = metar_dict | {"original_metar": metar_str}
+
+        parsed_metar.append(metar_dict)
+
+    return pd.DataFrame(parsed_metar)
 
 class MetarExtender(Metar.Metar):
     def __init__(self, metar_str):
         super().__init__(metar_str)
-        self.metar_str = metar_str
 
     @staticmethod
     def _metaf_to_metar(metaf_str):
@@ -454,3 +475,28 @@ class MetarExtender(Metar.Metar):
             metar_dict[key.strip()] = value.strip()
 
         return metar_dict
+    
+    @staticmethod
+    def clean_metar_dict(metar_dict):
+        for key in ["temperature", "dew point", "pressure"]:
+            if key in metar_dict:
+                metar_dict[key] = float(metar_dict[key].split(" ")[0])
+
+        if "time" in metar_dict:
+            # Example of metar_dict["time"]: Fri Sep 15 06:00:00 2023
+            metar_dict["time"] = pd.to_datetime(metar_dict["time"], format="%a %b %d %H:%M:%S %Y")
+
+        if "wind" in metar_dict:
+            # Example of metar_dict["wind"]: E at 31 knots
+            if re.match(r'\b[NEWS]+\b at \d+ knots', metar_dict["wind"]):
+                metar_dict["wind_direction"] = metar_dict["wind"].split(" ")[0]
+                metar_dict["wind_speed"] = int(metar_dict["wind"].split(" ")[2])
+
+        if "visibility" in metar_dict:
+            # Consider only the first visibility value, remove 'greater than' and get the value at first position
+            metar_dict["visibility"] = metar_dict["visibility"].split(";")[0].replace("greater than ", "").split(" ")[0]
+            metar_dict["visibility"] = int(metar_dict["visibility"])
+
+        return metar_dict
+
+

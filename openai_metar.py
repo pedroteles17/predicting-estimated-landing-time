@@ -16,5 +16,5 @@ if __name__ == "__main__":
     asyncio.set_event_loop(loop)
 
     loop.run_until_complete(openai_instance.main(
-        metar_strings[:500], output_directory="data/metar_scores_llm", save_interval=100
+        metar_strings, output_directory="data/metar_scores_llm", save_interval=1000
     ))

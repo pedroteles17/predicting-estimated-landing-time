@@ -119,7 +119,9 @@ missing_values_filler.fill_snapshot_radar(
 )
 
 # %%
-final_df = missing_values_filler.df.sort_values(by=["dt_dep", "flightid"])
+final_df = missing_values_filler.df\
+    .sort_values(by=["dt_dep", "flightid"])\
+    .reset_index(drop=True)
 
 # Save file to be used in the next steps
 final_df.to_parquet("data/feature_engineering/clean_data.parquet")

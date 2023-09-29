@@ -3,6 +3,7 @@ from utils import OpenAIAsync
 import asyncio
 import dotenv
 import os
+import time
 
 dotenv.load_dotenv()
 
@@ -12,9 +13,14 @@ if __name__ == "__main__":
 
     openai_instance = OpenAIAsync(os.getenv("OPENAI_API_KEY"))
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    step = 500
+    for i in range(0, len(metar_strings), step):
+        time.sleep(90)
+        print(f"Starting batch {i} to {i+step}")
 
-    loop.run_until_complete(openai_instance.main(
-        metar_strings, output_directory="data/metar_scores_llm", save_interval=1000
-    ))
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        loop.run_until_complete(openai_instance.main(
+            metar_strings[i:i+step], output_directory="data/metar_scores_llm", file_name=f"metar_results_{i}.json"
+        ))

@@ -136,38 +136,20 @@ class OpenAIAsync:
             except Exception as e:
                 print(f"Error deleting file {file_path}: {str(e)}")
 
-    async def main(self, metar_reports, output_directory, save_interval):
+    async def main(self, metar_reports, output_directory, file_name):
         tasks = [self.fetch_scores_for_metar(metar) for metar in metar_reports]
 
-        print("Progress:")
-        counter = 0
-        for task in tqdm(
-            asyncio.as_completed(tasks),
-            total=len(tasks),
-            desc="Fetching scores from LLM",
-        ):
+        for task in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Fetching scores from LLM"):
             await task
-            counter += 1
-            if counter % save_interval == 0:
-                # Save the results to a JSON file asynchronously every X iterations
-                await self.save_to_file(
-                    self.results_dict,
-                    f"{output_directory}/metar_results_{counter}.json",
-                )
-                # Delete the file from 3 iterations ago. This is to avoid filling up the disk
-                self.delete_old_file(
-                    output_directory,
-                    f"metar_results_{counter - (save_interval*3)}.json",
-                )
 
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.5)
 
         # Now, results_dict contains METAR data
         print("\nFinished fetching data.")
 
         # Save the results to a JSON file asynchronously
         await self.save_to_file(
-            self.results_dict, f"{output_directory}/metar_results.json"
+            self.results_dict, f"{output_directory}/{file_name}"
         )
 
     async def fetch_scores_for_metar(self, metar):

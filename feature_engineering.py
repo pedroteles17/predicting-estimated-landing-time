@@ -6,6 +6,11 @@ import json
 #%%
 clean_data = pd.read_parquet("data/feature_engineering/clean_data.parquet")
 
+metar_scores = pd.read_parquet("data/feature_engineering/metar_llm_scores.parquet")
+for column in metar_scores.columns:
+    if column != "unique_metar":
+        metar_scores.rename(columns={column: "metar_" + column}, inplace=True)
+
 clean_data = clean_data\
     .assign(
         tcr = lambda x: x["hora_tcr"].apply(lambda x: 0 if pd.isna(x) else 1), # Troca de Cabeceira Real
@@ -28,7 +33,8 @@ clean_data = clean_data\
         "hora_ref", "dt_arr",
         "metar", "metaf", "troca"
         ], axis=1
-    )
+    )\
+    .merge(metar_scores, on="unique_metar", how="left")
 
 #%%
 # Parse METARs

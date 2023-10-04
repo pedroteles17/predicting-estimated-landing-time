@@ -113,7 +113,7 @@ missing_values_filler = FillMissingValues(final_df)
 
 # May take close to 1 hour to run
 missing_values_filler.fill_snapshot_radar(
-    endpoints_data["cat-62"].copy(), minutes_lag=10
+    endpoints_data["cat-62"].copy(), minutes_lag=30
 ).fill_path(endpoints_data["satelite"].copy(), hours_lag=6).fill_metar(
     endpoints_data["metar"].copy(), hours_lag=6
 )
@@ -121,7 +121,11 @@ missing_values_filler.fill_snapshot_radar(
 # %%
 final_df = missing_values_filler.df\
     .sort_values(by=["dt_dep", "flightid"])\
-    .reset_index(drop=True)
+    .reset_index(drop=True)\
+    .assign(
+        dt_arr = lambda x: pd.to_datetime(x["dt_arr"], unit="ms"),
+        seconds_flying = lambda x: (x["dt_arr"] - x["dt_dep"]).dt.total_seconds()
+    )
 
 # Save file to be used in the next steps
 final_df.to_parquet("data/feature_engineering/clean_data.parquet")

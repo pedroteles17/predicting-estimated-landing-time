@@ -5,13 +5,26 @@ import numpy as np
 import re  # Regex
 import time
 import os
+import random
 from metar import Metar  # METAR parsing library
 import openai  # OpenAI API
 import json
 import aiofiles  # Async file writing
 import asyncio  # Async requests
 from tqdm import tqdm  # Progress bar
-from shapely.geometry import Point, MultiPoint  # Geospatial data
+from shapely import wkt # Geospatial data
+from geopy.distance import great_circle
+
+from tensorflow.keras.applications.vgg16 import preprocess_input, VGG16
+from tensorflow.keras.models import Model
+from tensorflow.keras.preprocessing.image import load_img
+from tensorflow.keras.preprocessing.image import img_to_array
+from sklearn.base import BaseEstimator, TransformerMixin, ClusterMixin
+from sklearn.pipeline import Pipeline
+from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
+from sklearn.mixture import GaussianMixture
+from sklearn.decomposition import PCA
+
 
 def cyclical_features_to_sin_cos(time_list, max_val: int) -> pd.DataFrame:
     sin = np.sin(2 * np.pi * time_list / max_val)
@@ -375,8 +388,15 @@ def parse_metars(metar_strings):
             obs = MetarExtender(clean_metar_str)
             metar_dict = MetarExtender.clean_metar_dict(obs.get_metar_dict())
         except:
-            print(f"Error parsing METAR: {metar_str}")
-            continue
+            try:
+                # If first try throws an error, try to remove the third word (METAR time)
+                word = clean_metar_str.split(" ")
+                clean_metar_str = " ".join(word[:2] + word[3:])
+                obs = MetarExtender(clean_metar_str)
+                metar_dict = MetarExtender.clean_metar_dict(obs.get_metar_dict())
+            except Exception as e:
+                print(f"Error parsing METAR: {metar_str} - {e}")
+                continue
 
         metar_dict = metar_dict | {"original_metar": metar_str}
 
@@ -480,5 +500,146 @@ class MetarExtender(Metar.Metar):
             metar_dict["visibility"] = int(metar_dict["visibility"])
 
         return metar_dict
+    
+class SnapshotRadar:
+    AIRPORT_LAT_LON = {
+        "SBSP": (-23.62695, -46.65503),
+        "SBGL": (-22.80888, -43.24378),
+        "SBGR": (-23.43227, -46.46948),
+        "SBBR": (-15.87120, -47.91933),
+        "SBRJ": (-22.91044, -43.16320),
+        "SBCT": (-25.52882, -49.17316),
+        "SBRF": (-8.12598, -34.92332),
+        "SBCF": (-19.63571, -43.96693),
+        "SBKP": (-23.00740, -47.13450),
+        "SBFL": (-27.67070, -48.54687),
+        "SBPA": (-29.99462, -51.17120),
+        "SBSV": (-12.91095, -38.33108),
+    }
+    
+    def __init__(self, radar_multipoints):
+        self.radar_multipoints = radar_multipoints
+
+    @staticmethod
+    def radians_to_degrees(radians):
+        return radians * 57.2958
+    
+    @staticmethod
+    def iterate_airport_distances(row):
+        if not pd.isna(row["snapshot_radar"]):
+            radar_multipoint = wkt.loads(row["snapshot_radar"])
+            return SnapshotRadar(radar_multipoint).calculate_distances_from_airport(row["destino"])
+    
+        return []
+
+    def calculate_distances_from_airport(self, airport_code: str):
+        airport_latitude, airport_longitude = self.AIRPORT_LAT_LON[airport_code]
+
+        distances = []
+        for point in self.radar_multipoints:
+            point_latitude, point_longitude = self.radians_to_degrees(point.x), self.radians_to_degrees(point.y)
+
+            distance = great_circle((point_latitude, point_longitude), (airport_latitude, airport_longitude))
+            distances.append(distance.kilometers)
+
+        return distances
+    
+class KerasFeatureExtractor(BaseEstimator, TransformerMixin):
+    def __init__(self, batch_size=32):
+        model = VGG16()
+        self.model = Model(inputs=model.inputs, outputs=model.layers[-2].output)
+        self.batch_size = batch_size
+
+    def fit(self, X):
+        return self
+
+    def transform(self, X):
+        n_samples = len(X)
+        n_batches = int(np.ceil(n_samples / self.batch_size))
+        features = []
+
+        for idx in range(n_batches):
+            start = idx * self.batch_size
+            end = (idx + 1) * self.batch_size
+            batch_images = X[start:end]
+            batch_features = self.process_batch(batch_images)
+            features.extend(batch_features)
+
+        return list(zip(X, np.vstack(features)))
+
+    def process_batch(self, batch_images):
+        batch_data = [preprocess_input(np.array(load_img(img, target_size=(224, 224)))) for img in batch_images]
+        batch_data = np.array(batch_data)
+        return self.model.predict(batch_data)
 
 
+class DimReducer(TransformerMixin, BaseEstimator):
+
+    def __init__(self, n_components=100, random_state=1):
+        self.n_components = n_components
+        self.random_state = random_state
+        self.pca = PCA(n_components=self.n_components, random_state=self.random_state)
+
+    def fit(self, X, y=None):
+        _, features = zip(*X)
+        self.pca.fit(features)
+        return self
+
+    def transform(self, X):
+        filenames, features = zip(*X)
+        reduced_features = self.pca.transform(features)
+        return list(zip(filenames, reduced_features))
+
+
+class ClusterKMeans(BaseEstimator, ClusterMixin):
+    def __init__(self, n_clusters=20):
+        self.n_clusters = n_clusters
+        self.kmeans = KMeans(n_clusters=self.n_clusters)
+
+    def fit(self, X, y=None):
+        filenames, features = zip(*X)
+        self.kmeans.fit(features)
+        self.labels_ = self.kmeans.labels_
+
+        self.groups = {}
+        for filename, label in zip(filenames, self.labels_):
+            if label not in self.groups:
+                self.groups[label] = []
+            self.groups[label].append(filename)
+
+        return self
+
+
+def satellite_main(img_path: str, n_sample: int = None):
+
+    list_imgs = [os.path.join(img_path, x) for x in os.listdir(img_path)]
+    if n_sample is not None:
+        list_imgs = random.sample(list_imgs, k=n_sample)
+
+    pipeline = Pipeline([
+      ("feature_extractor", KerasFeatureExtractor(batch_size=32)),
+      ("reducer", DimReducer()),
+      ("clustering", ClusterKMeans())
+    ])
+    pipeline.fit(list_imgs)
+
+    return pipeline
+
+"""Example usage:
+
+    import requests
+
+    for img in df["path"].dropna():
+
+        img_path = os.path.join(img_base_dir, img.split("/")[-1])
+        if os.path.exists(img_path):
+            continue
+
+        img_data = requests.get(img).content
+        with open(img_path, 'wb') as handler:
+            handler.write(img_data)
+        
+    pipe_obj = main(img_base_dir)
+    generated_groups = pipe_obj.named_steps["clustering"].groups
+
+"""

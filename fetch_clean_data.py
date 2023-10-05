@@ -8,7 +8,7 @@ dotenv.load_dotenv()
 
 api_token = os.getenv("API_TOKEN")
 
-kaggle_test = pd.read_csv("data/original_files/idsc_test.csv")
+kaggle_test = pd.read_excel("data/original_files/idsc_dataset.xlsx")
 
 # %%
 start_date = "2022-06-01"  # First Observation: 2022-06-01
@@ -63,7 +63,16 @@ for key, value in endpoints_data.items():
         endpoints_data[key][timestamp_column], unit="ms"
     )
 
-# %%
+endpoints_data["bimtra"]["dt_arr"] = pd.to_datetime(endpoints_data["bimtra"]["dt_arr"], unit="ms")
+
+#%%
+# We have some observations in which the airport of destiny is the same as the airport of origin
+## Plus, due to radar malfunction, we have some arrival times that 'happend' before the departure time and others too close to it
+endpoints_data["bimtra"] = endpoints_data["bimtra"][
+    ((endpoints_data["bimtra"]["dt_dep"] + pd.Timedelta(minutes=30)) <= endpoints_data["bimtra"]["dt_arr"]) &
+        (endpoints_data["bimtra"]["origem"] != endpoints_data["bimtra"]["destino"])
+]
+
 # We have some duplicated rows. We will drop them.
 endpoints_data["bimtra"] = endpoints_data["bimtra"].drop_duplicates()
 

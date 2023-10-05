@@ -63,14 +63,19 @@ for key, value in endpoints_data.items():
         endpoints_data[key][timestamp_column], unit="ms"
     )
 
-endpoints_data["bimtra"]["dt_arr"] = pd.to_datetime(endpoints_data["bimtra"]["dt_arr"], unit="ms")
+endpoints_data["bimtra"]["dt_arr"] = pd.to_datetime(
+    endpoints_data["bimtra"]["dt_arr"], unit="ms"
+)
 
-#%%
+# %%
 # We have some observations in which the airport of destiny is the same as the airport of origin
 ## Plus, due to radar malfunction, we have some arrival times that 'happend' before the departure time and others too close to it
 endpoints_data["bimtra"] = endpoints_data["bimtra"][
-    ((endpoints_data["bimtra"]["dt_dep"] + pd.Timedelta(minutes=30)) <= endpoints_data["bimtra"]["dt_arr"]) &
-        (endpoints_data["bimtra"]["origem"] != endpoints_data["bimtra"]["destino"])
+    (
+        (endpoints_data["bimtra"]["dt_dep"] + pd.Timedelta(minutes=30))
+        <= endpoints_data["bimtra"]["dt_arr"]
+    )
+    & (endpoints_data["bimtra"]["origem"] != endpoints_data["bimtra"]["destino"])
 ]
 
 # We have some duplicated rows. We will drop them.
@@ -128,13 +133,14 @@ missing_values_filler.fill_snapshot_radar(
 )
 
 # %%
-final_df = missing_values_filler.df\
-    .sort_values(by=["dt_dep", "flightid"])\
-    .reset_index(drop=True)\
+final_df = (
+    missing_values_filler.df.sort_values(by=["dt_dep", "flightid"])
+    .reset_index(drop=True)
     .assign(
-        dt_arr = lambda x: pd.to_datetime(x["dt_arr"], unit="ms"),
-        seconds_flying = lambda x: (x["dt_arr"] - x["dt_dep"]).dt.total_seconds()
+        dt_arr=lambda x: pd.to_datetime(x["dt_arr"], unit="ms"),
+        seconds_flying=lambda x: (x["dt_arr"] - x["dt_dep"]).dt.total_seconds(),
     )
+)
 
 # Save file to be used in the next steps
 final_df.to_parquet("data/feature_engineering/clean_data.parquet")

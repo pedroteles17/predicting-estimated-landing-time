@@ -12,13 +12,15 @@ import json
 import aiofiles  # Async file writing
 import asyncio  # Async requests
 from tqdm import tqdm  # Progress bar
-from shapely import wkt # Geospatial data
+from shapely import wkt  # Geospatial data
 from geopy.distance import great_circle
+
 
 def cyclical_features_to_sin_cos(time_list, max_val: int) -> pd.DataFrame:
     sin = np.sin(2 * np.pi * time_list / max_val)
     cos = np.cos(2 * np.pi * time_list / max_val)
     return sin, cos
+
 
 class FillMissingValues:
     def __init__(self, df: pd.DataFrame):
@@ -141,7 +143,11 @@ class OpenAIAsync:
     async def main(self, metar_reports, output_directory, file_name):
         tasks = [self.fetch_scores_for_metar(metar) for metar in metar_reports]
 
-        for task in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Fetching scores from LLM"):
+        for task in tqdm(
+            asyncio.as_completed(tasks),
+            total=len(tasks),
+            desc="Fetching scores from LLM",
+        ):
             await task
 
             await asyncio.sleep(0.5)
@@ -150,9 +156,7 @@ class OpenAIAsync:
         print("\nFinished fetching data.")
 
         # Save the results to a JSON file asynchronously
-        await self.save_to_file(
-            self.results_dict, f"{output_directory}/{file_name}"
-        )
+        await self.save_to_file(self.results_dict, f"{output_directory}/{file_name}")
 
     async def fetch_scores_for_metar(self, metar):
         try:
@@ -367,10 +371,13 @@ class FetchData:
             return None
 
         return df
-    
+
+
 def parse_metars(metar_strings):
     parsed_metar = []
-    for metar_str in tqdm(metar_strings, total=len(metar_strings), desc="Parsing METARs"):
+    for metar_str in tqdm(
+        metar_strings, total=len(metar_strings), desc="Parsing METARs"
+    ):
         clean_metar_str, _ = MetarExtender.clean_metar_string(metar_str)
 
         try:
@@ -392,6 +399,7 @@ def parse_metars(metar_strings):
         parsed_metar.append(metar_dict)
 
     return pd.DataFrame(parsed_metar)
+
 
 class MetarExtender(Metar.Metar):
     def __init__(self, metar_str):
@@ -466,7 +474,7 @@ class MetarExtender(Metar.Metar):
             metar_dict[key.strip()] = value.strip()
 
         return metar_dict
-    
+
     @staticmethod
     def clean_metar_dict(metar_dict):
         for key in ["temperature", "dew point", "pressure"]:
@@ -475,21 +483,29 @@ class MetarExtender(Metar.Metar):
 
         if "time" in metar_dict:
             # Example of metar_dict["time"]: Fri Sep 15 06:00:00 2023
-            metar_dict["time"] = pd.to_datetime(metar_dict["time"], format="%a %b %d %H:%M:%S %Y")
+            metar_dict["time"] = pd.to_datetime(
+                metar_dict["time"], format="%a %b %d %H:%M:%S %Y"
+            )
 
         if "wind" in metar_dict:
             # Example of metar_dict["wind"]: E at 31 knots
-            if re.match(r'\b[NEWS]+\b at \d+ knots', metar_dict["wind"]):
+            if re.match(r"\b[NEWS]+\b at \d+ knots", metar_dict["wind"]):
                 metar_dict["wind_direction"] = metar_dict["wind"].split(" ")[0]
                 metar_dict["wind_speed"] = int(metar_dict["wind"].split(" ")[2])
 
         if "visibility" in metar_dict:
             # Consider only the first visibility value, remove 'greater than' and get the value at first position
-            metar_dict["visibility"] = metar_dict["visibility"].split(";")[0].replace("greater than ", "").split(" ")[0]
+            metar_dict["visibility"] = (
+                metar_dict["visibility"]
+                .split(";")[0]
+                .replace("greater than ", "")
+                .split(" ")[0]
+            )
             metar_dict["visibility"] = int(metar_dict["visibility"])
 
         return metar_dict
-    
+
+
 class SnapshotRadar:
     AIRPORT_LAT_LON = {
         "SBSP": (-23.62695, -46.65503),
@@ -505,20 +521,22 @@ class SnapshotRadar:
         "SBPA": (-29.99462, -51.17120),
         "SBSV": (-12.91095, -38.33108),
     }
-    
+
     def __init__(self, radar_multipoints):
         self.radar_multipoints = radar_multipoints
 
     @staticmethod
     def radians_to_degrees(radians):
         return radians * 57.2958
-    
+
     @staticmethod
     def iterate_airport_distances(row):
         if not pd.isna(row["snapshot_radar"]):
             radar_multipoint = wkt.loads(row["snapshot_radar"])
-            return SnapshotRadar(radar_multipoint).calculate_distances_from_airport(row["destino"])
-    
+            return SnapshotRadar(radar_multipoint).calculate_distances_from_airport(
+                row["destino"]
+            )
+
         return []
 
     def calculate_distances_from_airport(self, airport_code: str):
@@ -526,9 +544,13 @@ class SnapshotRadar:
 
         distances = []
         for point in self.radar_multipoints:
-            point_latitude, point_longitude = self.radians_to_degrees(point.x), self.radians_to_degrees(point.y)
+            point_latitude, point_longitude = self.radians_to_degrees(
+                point.x
+            ), self.radians_to_degrees(point.y)
 
-            distance = great_circle((point_latitude, point_longitude), (airport_latitude, airport_longitude))
+            distance = great_circle(
+                (point_latitude, point_longitude), (airport_latitude, airport_longitude)
+            )
             distances.append(distance.kilometers)
 
         return distances

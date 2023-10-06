@@ -1,11 +1,11 @@
 # %%
 import requests
 import pandas as pd
+import duckdb
 import numpy as np
 import re  # Regex
 import time
 import os
-import random
 from metar import Metar  # METAR parsing library
 import openai  # OpenAI API
 import json
@@ -14,7 +14,195 @@ import asyncio  # Async requests
 from tqdm import tqdm  # Progress bar
 from shapely import wkt  # Geospatial data
 from geopy.distance import great_circle
+from typing import Tuple
 
+def number_of_flights_expected(
+    table_name: str, airport: str, date: pd._libs.tslibs.timestamps.Timestamp, 
+    minutes_lag: Tuple[int, int], departure: bool
+):
+    column = "dt_dep" if departure else "expected_arrival"
+
+    start_time = date + pd.Timedelta(minutes=minutes_lag[0])
+    end_time = date + pd.Timedelta(minutes=minutes_lag[1])
+
+    duckdb_query = f"""
+    SELECT COUNT(*) FROM {table_name}
+    WHERE {column} > '{start_time}' 
+        AND {column} < '{end_time}'
+            AND destino = '{airport}'
+    """
+
+    row_count = duckdb.sql(duckdb_query).fetchall()[0][0]
+
+    return row_count
+
+class BrazilianHolidays:
+    HOLIDAYS = [
+        "2022-06-16", 
+        "2022-09-07",
+        "2022-10-12",
+        "2022-11-02",
+        "2022-11-15",
+        "2022-12-25",
+        "2023-01-01",
+        "2023-02-28",
+        "2023-03-01",
+        "2023-04-07",
+        "2023-04-21",
+        "2023-05-01",
+        "2023-06-15",
+        "2023-09-07",
+        "2023-10-12",
+        "2023-11-02",
+        "2023-11-15",
+        "2023-12-25",
+        ]
+
+    def __init__(self):
+        self.holidays = pd.to_datetime(self.HOLIDAYS)
+
+    def days_to_holiday(self, date: pd._libs.tslibs.timestamps.Timestamp) -> int:
+        return min(abs(self.holidays - date))
+    
+class BrazilianAirports:   
+    AIRPORT_INFO = {
+        "SBSP": {
+            "name": "Congonhas",
+            "city": "São Paulo",
+            "state": "SP",
+            "lat": -23.626110076904297,
+            "lon": -46.65638732910156,
+            "elevation": 802,
+            "runway_number": 2,
+            "runway_length": [1660, 1195],
+        },
+        "SBCT": {
+            "name": "Afonso Pena",
+            "city": "Curitiba",
+            "state": "PR",
+            "lat": -25.531700134277344,
+            "lon": -49.17580032348633,
+            "elevation": 911,
+            "runway_number": 2,
+            "runway_length": [2218, 1798],
+        },
+        "SBPA": {
+            "name": "Salgado Filho",
+            "city": "Porto Alegre",
+            "state": "RS",
+            "lat": -29.994400024414062,
+            "lon": -51.1713981628418,
+            "elevation": 3,
+            "runway_number": 1,
+            "runway_length": [3200],
+        },
+        "SBSV": {
+            "name": "Deputado Luís Eduardo Magalhães",
+            "city": "Salvador",
+            "state": "BA",
+            "lat": -12.908611297607422,
+            "lon": -38.3224983215332,
+            "elevation": 20,
+            "runway_number": 2,
+            "runway_length": [2763, 1518],
+        },
+        "SBGR": {
+            "name": "Guarulhos",
+            "city": "São Paulo",
+            "state": "SP",
+            "lat": -23.435556411743164,
+            "lon": -46.47305679321289,
+            "elevation": 750,
+            "runway_number": 2,
+            "runway_length": [3000, 3620],
+        },
+        "SBCF": {
+            "name": "Tancredo Neves",
+            "city": "Belo Horizonte",
+            "state": "MG",
+            "lat": -19.62444305419922,
+            "lon": -43.97194290161133,
+            "elevation": 827,
+            "runway_number": 1,
+            "runway_length": [3600],
+        },
+        "SBBR": {
+            "name": "Presidente Juscelino Kubitschek",
+            "city": "Brasília",
+            "state": "DF",
+            "lat": -15.86916732788086,
+            "lon": -47.920833587646484,
+            "elevation": 1066,
+            "runway_number": 2,
+            "runway_length": [3050, 3150],
+        },
+        "SBRF": {
+            "name": "Guararapes - Gilberto Freyre",
+            "city": "Recife",
+            "state": "PE",
+            "lat": -8.126389503479004,
+            "lon": -34.92361068725586,
+            "elevation": 10,
+            "runway_number": 1,
+            "runway_length": [2751],
+        },
+        "SBRJ": {
+            "name": "Santos Dumont",
+            "city": "Rio de Janeiro",
+            "state": "RJ",
+            "lat": -22.9102783203125,
+            "lon": -43.16310119628906,
+            "elevation": 3,
+            "runway_number": 2,
+            "runway_length": [1260, 1323],
+        },
+        "SBGL": {
+            "name": "Galeão - Antônio Carlos Jobim",
+            "city": "Rio de Janeiro",
+            "state": "RJ",
+            "lat": -22.809999465942383,
+            "lon": -43.25055694580078,
+            "elevation": 9,
+            "runway_number": 2,
+            "runway_length": [2930, 4000],
+        },
+        "SBKP": {
+            "name": "Viracopos",
+            "city": "Campinas",
+            "state": "SP",
+            "lat": -23.007400512695312,
+            "lon": -47.134498596191406,
+            "elevation": 661,
+            "runway_number": 1,
+            "runway_length": [3150],
+        },
+        "SBFL": {
+            "name": "Hercílio Luz",
+            "city": "Florianópolis",
+            "state": "SC",
+            "lat": -27.670278549194336,
+            "lon": -48.5525016784668,
+            "elevation": 5,
+            "runway_number": 2,
+            "runway_length": [2400, 1180],
+        },
+    }
+
+    def __init__(self):
+        self.airport_info = self.AIRPORT_INFO
+
+    def calculate_distance(
+        self, airport_1: str, airport_2: str
+    ) -> float:
+        airport_1 = self.airport_info[airport_1]
+        airport_2 = self.airport_info[airport_2]
+        return great_circle(
+            (airport_1["lat"], airport_1["lon"]), (airport_2["lat"], airport_2["lon"])
+        ).kilometers
+    
+    def get_runway_info(self, airport: str) -> dict:
+        selected_keys = ["runway_number", "runway_length", "elevation"]
+        return {key: self.airport_info[airport][key] for key in selected_keys}
 
 def cyclical_features_to_sin_cos(time_list, max_val: int) -> pd.DataFrame:
     sin = np.sin(2 * np.pi * time_list / max_val)

@@ -1,12 +1,12 @@
 # %%
 import pandas as pd
-from utils import cyclical_features_to_sin_cos, parse_metars, SnapshotRadar
+from utils import cyclical_features_to_sin_cos, parse_metars, SnapshotRadar, BrazilianHolidays, BrazilianAirports
 from tqdm import tqdm
 import calendar
 
 tqdm.pandas()
 
-train_or_test = "test"  # test or train
+train_or_test = "train"  # test or train
 
 if train_or_test == "train":
     clean_data = pd.read_parquet("data/feature_engineering/clean_data.parquet")
@@ -47,6 +47,15 @@ clean_data = (
         estimated_departure=lambda x: pd.to_datetime(
             x["image_date"].dt.strftime("%Y-%m-%d") + " " + x["dt_dep_aux"].astype(str)
         ),
+        days_to_holiday = lambda x: x["estimated_departure"].apply(
+            lambda x: BrazilianHolidays().days_to_holiday(x).days
+        ),
+        airport=lambda x: x["destino"].apply(
+            lambda x: BrazilianAirports().get_runway_info(x)
+        ),
+        distance_from_airports = lambda x: x.apply(
+            lambda x: BrazilianAirports().calculate_distance(x["origem"], x["destino"]), axis=1
+        ),
     )
     .drop(
         [
@@ -68,8 +77,17 @@ clean_data = (
         ],
         axis=1,
     )
-    .merge(metar_scores, on="unique_metar", how="left")
+    .merge(metar_scores, on="unique_metar", how="left")\
+    .reset_index(drop=True)
 )
+
+# 'airport' is a dict. We will explode it into columns
+exploded_data = clean_data["airport"].apply(pd.Series)
+clean_data = pd.concat([clean_data, exploded_data], axis=1).drop(["airport"], axis=1)
+
+# Add dumies for airport (destiny)
+encoded_categories = pd.get_dummies(clean_data['destino'], prefix='destino')
+clean_data = pd.concat([clean_data, encoded_categories], axis=1)
 
 # Drop column if it exists (this will happen if clean_data is the training data)
 if "dt_arr" in clean_data.columns:
@@ -116,6 +134,16 @@ clean_data[["hour_sin", "hour_cos"]] = list(
     )
 )
 
+clean_data[["day_sin", "day_cos"]] = list(
+    clean_data["estimated_departure"].apply(
+        lambda x: cyclical_features_to_sin_cos(
+            x.day, calendar.monthrange(x.year, x.month)[1]
+        )
+        if not pd.isna(x)
+        else (pd.NA, pd.NA)
+    )
+)
+
 clean_data[["week_sin", "week_cos"]] = list(
     clean_data["estimated_departure"].apply(
         lambda x: cyclical_features_to_sin_cos(x.week, 7)
@@ -127,7 +155,7 @@ clean_data[["week_sin", "week_cos"]] = list(
 clean_data[["month_sin", "month_cos"]] = list(
     clean_data["estimated_departure"].apply(
         lambda x: cyclical_features_to_sin_cos(
-            x.month, calendar.monthrange(x.year, x.month)[1]
+            x.month, 12
         )
         if not pd.isna(x)
         else (pd.NA, pd.NA)

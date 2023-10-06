@@ -145,7 +145,11 @@ X_test_input.columns = X_test.columns
 
 # %%
 # Initialize the XGBoost Regressor
-model = lgb.LGBMRegressor(random_state=42)
+model = lgb.LGBMRegressor(
+    random_state=42, learning_rate=0.1,
+    n_estimators=500, reg_alpha=0.05, reg_lambda=0.05,
+    importance_type="gain"
+)
 # model = xgb.XGBRgressor(random_state=42)
 #model = catboost.CatBoostRegressor(random_state=42)
 
@@ -155,10 +159,11 @@ model.fit(X_train_input, y_train)
 y_pred = model.predict(X_test_input)
 
 # %%
-flight_info["y_pred"] = y_pred
+flight_pred = flight_info.copy()
+flight_pred["y_pred"] = y_pred
 
-flight_info = (
-    flight_info.assign(
+flight_pred = (
+    flight_pred.assign(
         equal_airport=lambda x: pd.to_numeric(x["origem"] != x["destino"]),
         y_pred=lambda x: x["y_pred"] * x["equal_airport"],
     )
@@ -166,9 +171,10 @@ flight_info = (
     .rename({"flightid": "id", "y_pred": "solution"}, axis=1)
 )
 
-flight_info.to_csv("submission_lightgbm.csv", index=False)
+flight_pred.to_csv("submission_lightgbm.csv", index=False)
 
 # %%
+import pandas._libs.missing as pd_missing
 column_names = encoded_categories.columns.tolist()
 column_names = ["number_flights_departing", "number_flights_arriving"]
 X_test[column_names] = X_test[column_names].replace(pd_missing.NAType(), pd.NA).astype("Int64")

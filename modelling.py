@@ -2,16 +2,23 @@
 import pandas as pd
 import numpy as np
 import duckdb
-from utils import number_of_flights_expected, calculate_expected_arrival
+from utils import number_of_flights_expected, calculate_expected_arrival, get_image_clusters
 from fancyimpute import IterativeImputer
 import xgboost as xgb
 import lightgbm as lgb
 import catboost
+import optuna
 from tqdm import tqdm
 import pandas._libs.missing as pd_missing
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+import os
 
 tqdm.pandas()
 
+# %%
+import importlib
+import utils
 # %%
 train = pd.read_parquet("data/modelling/train_df.parquet").assign(
     origin_destiny=lambda x: x["origem"] + "_" + x["destino"]
@@ -73,7 +80,7 @@ train = (
             "destino",
             "origin_destiny",
             "dt_dep",
-            "path",
+            # "path",
             "unique_metar",
             "time",
             "image_date",
@@ -138,7 +145,7 @@ X_test = X_test.assign(
         "destino",
         "origin_destiny",
         "dt_dep",
-        "path",
+        # "path",
         "unique_metar",
         "time",
         "image_date",
@@ -148,31 +155,106 @@ X_test = X_test.assign(
     ],
     axis=1,
 )
+# %%
+# IMAGE CLASSIFIER
+
+# X_train["path"] = [
+#     os.path.join("weather_images", x.split("/")[-1])
+#     if x != ""
+#     else np.nan for x in X_train["path"].fillna("")
+# ]
+# img_clusters = utils.get_image_clusters(X_train["path"].dropna())
+# X_train["image_cluster"] = X_train["path"].replace(img_clusters)
+
+X_train = X_train.drop(columns=["path"])
+X_test = X_test.drop(columns=["path"])
 
 # %%
-# Create an instance of the IterativeImputer class
+# SPECIAL INTERATIVEIMPUTER FOR SPLITTING TRAING AND TEST
+
 imputer = IterativeImputer(max_iter=10, random_state=42)
 
 # Fit the imputer to your data
+
+X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2)
+
 imputer.fit(X_train)
 
 # Transform your data to impute missing values
 X_train_input = pd.DataFrame(imputer.transform(X_train))
 X_train_input.columns = X_train.columns
 
-X_test_input = pd.DataFrame(imputer.transform(X_test))
-X_test_input.columns = X_test.columns
+X_val_input = pd.DataFrame(imputer.transform(X_val))
+X_val_input.columns = X_val.columns
 
 # %%
-# Initialize the XGBoost Regressor
-model = lgb.LGBMRegressor(importance_type="gain")
-# model = xgb.XGBRgressor(random_state=42)
-# model = catboost.CatBoostRegressor(random_state=42)
+# IMPUTER WITHOUT SPLITTING TRAIN / TEST / VAL (old version)
 
-# Train the model on the training data
-model.fit(X_train_input, y_train)
+# # Create an instance of the IterativeImputer class
+# imputer = IterativeImputer(max_iter=10, random_state=42)
 
-y_pred = model.predict(X_test_input)
+# # Fit the imputer to your data
+
+# X_train = X_train.replace({pd.NA: np.nan})
+# X_test = X_test.replace({pd.NA: np.nan})
+
+# imputer.fit(X_train)
+
+# # Transform your data to impute missing values
+# X_train_input = pd.DataFrame(imputer.transform(X_train))
+# X_train_input.columns = X_train.columns
+
+# X_test_input = pd.DataFrame(imputer.transform(X_test))
+# X_test_input.columns = X_test.columns
+
+
+# %% LIGHT GBM with parameter optimization
+
+def objective(trial):
+
+    params = {
+        'objective': 'regression',
+        'metric': 'rmse',
+        'verbosity': -1,
+        'boosting_type': 'gbdt',
+        'lambda_l1': trial.suggest_float('lambda_l1', 1e-8, 10.0, log=True),
+        'lambda_l2': trial.suggest_float('lambda_l2', 1e-8, 10.0, log=True),
+        'num_leaves': trial.suggest_int('num_leaves', 2, 256),
+        'feature_fraction': trial.suggest_float('feature_fraction', 0.4, 1.0),
+        'bagging_fraction': trial.suggest_float('bagging_fraction', 0.4, 1.0),
+        'bagging_freq': trial.suggest_int('bagging_freq', 1, 7),
+        'min_child_samples': trial.suggest_int('min_child_samples', 5, 100),
+    }
+
+    gbm = lgb.LGBMRegressor(**params, importance_type="gain")
+    gbm.fit(X_train_input, y_train)
+    
+    y_pred = gbm.predict(X_val_input)
+    rmse = mean_squared_error(y_val, y_pred, squared=False)
+    return rmse
+
+
+study = optuna.create_study(direction='maximize')
+study.optimize(objective, n_trials=100)
+
+# now fitting the model and applying in y_train
+model = lgb.LGBMRegressor(**study.best_params)
+model.fit(X_train, y_train)
+
+y_pred = model.predict(X_test)
+
+# %%
+# LGBM WITHOUT PARAM OPTIMIZATION
+
+# # Initialize the XGBoost Regressor
+# model = lgb.LGBMRegressor(importance_type="gain")
+# # model = xgb.XGBRgressor(random_state=42)
+# # model = catboost.CatBoostRegressor(random_state=42)
+
+# # Train the model on the training data
+# model.fit(X_train_input, y_train)
+
+# y_pred = model.predict(X_test_input)
 
 # %%
 flight_pred = flight_info.copy()

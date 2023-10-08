@@ -1,12 +1,16 @@
 # %%
 import pandas as pd
-from utils import cyclical_features_to_sin_cos, parse_metars, SnapshotRadar, BrazilianHolidays, BrazilianAirports
-from tqdm import tqdm
+import numpy as np
+from utils import (
+    cyclical_features_to_sin_cos,
+    parse_metars,
+    BrazilianHolidays,
+    BrazilianAirports,
+    GeoSpatial
+)
 import calendar
 
-tqdm.pandas()
-
-train_or_test = "train"  # test or train
+train_or_test = "test"  # test or train
 
 if train_or_test == "train":
     clean_data = pd.read_parquet("data/feature_engineering/clean_data.parquet")
@@ -47,14 +51,15 @@ clean_data = (
         estimated_departure=lambda x: pd.to_datetime(
             x["image_date"].dt.strftime("%Y-%m-%d") + " " + x["dt_dep_aux"].astype(str)
         ),
-        days_to_holiday = lambda x: x["estimated_departure"].apply(
+        days_to_holiday=lambda x: x["estimated_departure"].apply(
             lambda x: BrazilianHolidays().days_to_holiday(x).days
         ),
         airport=lambda x: x["destino"].apply(
             lambda x: BrazilianAirports().get_runway_info(x)
         ),
-        distance_from_airports = lambda x: x.apply(
-            lambda x: BrazilianAirports().calculate_distance(x["origem"], x["destino"]), axis=1
+        distance_from_airports=lambda x: x.apply(
+            lambda x: BrazilianAirports().calculate_distance(x["origem"], x["destino"]),
+            axis=1,
         ),
     )
     .drop(
@@ -77,7 +82,7 @@ clean_data = (
         ],
         axis=1,
     )
-    .merge(metar_scores, on="unique_metar", how="left")\
+    .merge(metar_scores, on="unique_metar", how="left")
     .reset_index(drop=True)
 )
 
@@ -86,7 +91,7 @@ exploded_data = clean_data["airport"].apply(pd.Series)
 clean_data = pd.concat([clean_data, exploded_data], axis=1).drop(["airport"], axis=1)
 
 # Add dumies for airport (destiny)
-encoded_categories = pd.get_dummies(clean_data['destino'], prefix='destino')
+encoded_categories = pd.get_dummies(clean_data["destino"], prefix="destino")
 clean_data = pd.concat([clean_data, encoded_categories], axis=1)
 
 # Drop column if it exists (this will happen if clean_data is the training data)
@@ -119,7 +124,19 @@ if "visual range" in parsed_metar.columns:
 
 clean_data = clean_data.merge(
     parsed_metar, left_on="unique_metar", right_on="original_metar", how="left"
-).drop(["original_metar", "wind_direction", "wind_speed"], axis=1)
+)\
+    .drop(["original_metar"], axis=1)\
+    .assign(
+        wind_direction = lambda x: x["wind_direction"].apply(
+            lambda x: GeoSpatial.cardinal_direction_to_degrees(x) if not pd.isna(x) else 0
+        ),
+        flight_direction = lambda x: x.apply(lambda x: GeoSpatial.direction_between_points(
+            (BrazilianAirports.AIRPORT_INFO[x["origem"]]["lat"], BrazilianAirports.AIRPORT_INFO[x["origem"]]["lon"]), 
+            (BrazilianAirports.AIRPORT_INFO[x["destino"]]["lat"], BrazilianAirports.AIRPORT_INFO[x["destino"]]["lon"])
+        ), axis=1),
+        flight_wind_direction = lambda x: np.cos(np.deg2rad(x["flight_direction"] - x["wind_direction"])),
+        flight_wind_speed = lambda x: x["wind_speed"] * x["flight_wind_direction"],
+    )
 
 # %%
 # Transform timestamps to cyclical features (sin, cos)
@@ -154,30 +171,14 @@ clean_data[["week_sin", "week_cos"]] = list(
 
 clean_data[["month_sin", "month_cos"]] = list(
     clean_data["estimated_departure"].apply(
-        lambda x: cyclical_features_to_sin_cos(
-            x.month, 12
-        )
+        lambda x: cyclical_features_to_sin_cos(x.month, 12)
         if not pd.isna(x)
         else (pd.NA, pd.NA)
     )
 )
 
 # %%
-clean_data["snapshot_radar_distances"] = clean_data.progress_apply(
-    SnapshotRadar.iterate_airport_distances, axis=1
-)
-
-clean_data = clean_data.assign(
-    radar_less_500_km=lambda x: x["snapshot_radar_distances"].apply(
-        lambda x: len([i for i in x if i < 500]) if len(x) > 0 else pd.NA
-    ),
-    radar_less_1000_km=lambda x: x["snapshot_radar_distances"].apply(
-        lambda x: len([i for i in x if i < 1000]) if len(x) > 0 else pd.NA
-    ),
-    radar_total=lambda x: x["snapshot_radar_distances"].apply(
-        lambda x: len(x) if len(x) > 0 else pd.NA
-    ),
-).drop(["snapshot_radar_distances", "snapshot_radar"], axis=1)
+clean_data = clean_data.drop(["snapshot_radar"], axis=1)
 
 clean_data.to_parquet(output_file)
 

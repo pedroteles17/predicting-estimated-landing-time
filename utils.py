@@ -12,15 +12,28 @@ import json
 import aiofiles  # Async file writing
 import asyncio  # Async requests
 from tqdm import tqdm  # Progress bar
-from shapely import wkt  # Geospatial data
 from geopy.distance import great_circle
 from typing import Tuple
+import pyproj
+
+
+def calculate_expected_arrival(row):
+    if pd.isna(row["estimated_departure"]) or pd.isna(row["origin_destiny_encode"]):
+        return pd.NA
+
+    return row["estimated_departure"] + pd.Timedelta(
+        seconds=row["origin_destiny_encode"]
+    )
+
 
 def number_of_flights_expected(
-    table_name: str, airport: str, date: pd._libs.tslibs.timestamps.Timestamp, 
-    minutes_lag: Tuple[int, int], departure: bool
+    table_name: str,
+    airport: str,
+    date: pd._libs.tslibs.timestamps.Timestamp,
+    minutes_lag: Tuple[int, int],
+    departure: bool,
 ):
-    column = "dt_dep" if departure else "expected_arrival"
+    column = "estimated_departure" if departure else "expected_arrival"
 
     start_time = date + pd.Timedelta(minutes=minutes_lag[0])
     end_time = date + pd.Timedelta(minutes=minutes_lag[1])
@@ -36,9 +49,47 @@ def number_of_flights_expected(
 
     return row_count
 
+class GeoSpatial:
+    @staticmethod
+    def cardinal_direction_to_degrees(cardinal_direction: str) -> float:
+        cardinal_directions = [
+            "N",
+            "NNE",
+            "NE",
+            "ENE",
+            "E", 
+            "ESE",
+            "SE",
+            "SSE",
+            "S",
+            "SSW",
+            "SW",
+            "WSW",
+            "W",
+            "WNW",
+            "NW",
+            "NNW",
+        ]
+
+        if cardinal_direction not in cardinal_directions:
+            return None   
+
+        return cardinal_directions.index(cardinal_direction) * 22.5
+    
+    @staticmethod
+    def direction_between_points(point_1: Tuple[float, float], point_2: Tuple[float, float]) -> float:
+        # point_1 and point_2 are tuples with (lat, lon)
+        lat_1, lon_1 = point_1
+        lat_2, lon_2 = point_2
+        
+        geodesic = pyproj.Geod(ellps='WGS84')
+        fwd_azimuth, _, _ = geodesic.inv(lon_1, lat_1, lon_2, lat_2)
+
+        return fwd_azimuth
+
 class BrazilianHolidays:
     HOLIDAYS = [
-        "2022-06-16", 
+        "2022-06-16",
         "2022-09-07",
         "2022-10-12",
         "2022-11-02",
@@ -56,15 +107,16 @@ class BrazilianHolidays:
         "2023-11-02",
         "2023-11-15",
         "2023-12-25",
-        ]
+    ]
 
     def __init__(self):
         self.holidays = pd.to_datetime(self.HOLIDAYS)
 
     def days_to_holiday(self, date: pd._libs.tslibs.timestamps.Timestamp) -> int:
         return min(abs(self.holidays - date))
-    
-class BrazilianAirports:   
+
+
+class BrazilianAirports:
     AIRPORT_INFO = {
         "SBSP": {
             "name": "Congonhas",
@@ -191,18 +243,17 @@ class BrazilianAirports:
     def __init__(self):
         self.airport_info = self.AIRPORT_INFO
 
-    def calculate_distance(
-        self, airport_1: str, airport_2: str
-    ) -> float:
+    def calculate_distance(self, airport_1: str, airport_2: str) -> float:
         airport_1 = self.airport_info[airport_1]
         airport_2 = self.airport_info[airport_2]
         return great_circle(
             (airport_1["lat"], airport_1["lon"]), (airport_2["lat"], airport_2["lon"])
         ).kilometers
-    
+
     def get_runway_info(self, airport: str) -> dict:
         selected_keys = ["runway_number", "runway_length", "elevation"]
         return {key: self.airport_info[airport][key] for key in selected_keys}
+
 
 def cyclical_features_to_sin_cos(time_list, max_val: int) -> pd.DataFrame:
     sin = np.sin(2 * np.pi * time_list / max_val)
@@ -680,6 +731,16 @@ class MetarExtender(Metar.Metar):
             if re.match(r"\b[NEWS]+\b at \d+ knots", metar_dict["wind"]):
                 metar_dict["wind_direction"] = metar_dict["wind"].split(" ")[0]
                 metar_dict["wind_speed"] = int(metar_dict["wind"].split(" ")[2])
+            # Example of metar_dict["wind"]: E to SSE at 10 knots
+            elif re.match(r"\b[NEWS]+ to [NEWS]+ at \d+ knots\b", metar_dict["wind"]):
+                metar_dict["wind_direction"] = metar_dict["wind"].split(" ")[2]
+                metar_dict["wind_speed"] = int(metar_dict["wind"].split(" ")[-2])
+            elif re.match(r"variable at \d+ knots", metar_dict["wind"]):
+                metar_dict["wind_direction"] = "variable"
+                metar_dict["wind_speed"] = int(metar_dict["wind"].split(" ")[-2])
+            elif metar_dict["wind"] == "calm":
+                metar_dict["wind_direction"] = "calm"
+                metar_dict["wind_speed"] = 0
 
         if "visibility" in metar_dict:
             # Consider only the first visibility value, remove 'greater than' and get the value at first position
@@ -692,53 +753,3 @@ class MetarExtender(Metar.Metar):
             metar_dict["visibility"] = int(metar_dict["visibility"])
 
         return metar_dict
-
-
-class SnapshotRadar:
-    AIRPORT_LAT_LON = {
-        "SBSP": (-23.62695, -46.65503),
-        "SBGL": (-22.80888, -43.24378),
-        "SBGR": (-23.43227, -46.46948),
-        "SBBR": (-15.87120, -47.91933),
-        "SBRJ": (-22.91044, -43.16320),
-        "SBCT": (-25.52882, -49.17316),
-        "SBRF": (-8.12598, -34.92332),
-        "SBCF": (-19.63571, -43.96693),
-        "SBKP": (-23.00740, -47.13450),
-        "SBFL": (-27.67070, -48.54687),
-        "SBPA": (-29.99462, -51.17120),
-        "SBSV": (-12.91095, -38.33108),
-    }
-
-    def __init__(self, radar_multipoints):
-        self.radar_multipoints = radar_multipoints
-
-    @staticmethod
-    def radians_to_degrees(radians):
-        return radians * 57.2958
-
-    @staticmethod
-    def iterate_airport_distances(row):
-        if not pd.isna(row["snapshot_radar"]):
-            radar_multipoint = wkt.loads(row["snapshot_radar"])
-            return SnapshotRadar(radar_multipoint).calculate_distances_from_airport(
-                row["destino"]
-            )
-
-        return []
-
-    def calculate_distances_from_airport(self, airport_code: str):
-        airport_latitude, airport_longitude = self.AIRPORT_LAT_LON[airport_code]
-
-        distances = []
-        for point in self.radar_multipoints:
-            point_latitude, point_longitude = self.radians_to_degrees(
-                point.x
-            ), self.radians_to_degrees(point.y)
-
-            distance = great_circle(
-                (point_latitude, point_longitude), (airport_latitude, airport_longitude)
-            )
-            distances.append(distance.kilometers)
-
-        return distances

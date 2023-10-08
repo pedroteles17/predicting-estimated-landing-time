@@ -21,6 +21,10 @@ if __name__ == "__main__":
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-        loop.run_until_complete(openai_instance.main(
-            metar_strings[i:i+step], output_directory="data/metar_scores_llm", file_name=f"metar_results_{i}.json"
-        ))
+        loop.run_until_complete(
+            openai_instance.main(
+                metar_strings[i : i + step],
+                output_directory="data/metar_scores_llm",
+                file_name=f"metar_results_{i}.json",
+            )
+        )

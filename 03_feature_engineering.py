@@ -6,7 +6,7 @@ from utils import (
     parse_metars,
     BrazilianHolidays,
     BrazilianAirports,
-    GeoSpatial
+    GeoSpatial,
 )
 import calendar
 
@@ -120,31 +120,46 @@ parsed_metar = (
 if "visual range" in parsed_metar.columns:
     parsed_metar.drop(["visual range"], axis=1, inplace=True)  # Too many NaNs
 
-clean_data = clean_data.merge(
-    parsed_metar, left_on="unique_metar", right_on="original_metar", how="left"
-)\
-    .drop(["original_metar"], axis=1)\
-    .assign(
-        sky = lambda x: x["sky"].apply(lambda x: 0 if pd.isna(x) else 1),
-        weather = lambda x: x["weather"].apply(lambda x: 0 if pd.isna(x) else 1),
-        wind_direction = lambda x: x["wind_direction"].apply(
-            lambda x: "N" if x in ["calm", "variable"] else x
-        ),  
-    )\
-    .assign(
-        flight_direction = lambda x: x.apply(lambda x: GeoSpatial.direction_between_points(
-            (BrazilianAirports.AIRPORT_INFO[x["origem"]]["lat"], BrazilianAirports.AIRPORT_INFO[x["origem"]]["lon"]), 
-            (BrazilianAirports.AIRPORT_INFO[x["destino"]]["lat"], BrazilianAirports.AIRPORT_INFO[x["destino"]]["lon"])
-        ), axis=1),
-        wind_direction = lambda x: x["wind_direction"].apply(
-            lambda x: GeoSpatial.cardinal_direction_to_degrees(x) if not pd.isna(x) else pd.NA
-        ),
-        flight_wind_direction = lambda x: x.apply(lambda x:
-            np.cos(np.deg2rad(x["flight_direction"] - x["wind_direction"])) if not pd.isna(x["wind_direction"]) else pd.NA,
-            axis=1
-        ),
-        flight_wind_speed = lambda x: x["wind_speed"] * x["flight_wind_direction"],
+clean_data = (
+    clean_data.merge(
+        parsed_metar, left_on="unique_metar", right_on="original_metar", how="left"
     )
+    .drop(["original_metar"], axis=1)
+    .assign(
+        sky=lambda x: x["sky"].apply(lambda x: 0 if pd.isna(x) else 1),
+        weather=lambda x: x["weather"].apply(lambda x: 0 if pd.isna(x) else 1),
+        wind_direction=lambda x: x["wind_direction"].apply(
+            lambda x: "N" if x in ["calm", "variable"] else x
+        ),
+    )
+    .assign(
+        flight_direction=lambda x: x.apply(
+            lambda x: GeoSpatial.direction_between_points(
+                (
+                    BrazilianAirports.AIRPORT_INFO[x["origem"]]["lat"],
+                    BrazilianAirports.AIRPORT_INFO[x["origem"]]["lon"],
+                ),
+                (
+                    BrazilianAirports.AIRPORT_INFO[x["destino"]]["lat"],
+                    BrazilianAirports.AIRPORT_INFO[x["destino"]]["lon"],
+                ),
+            ),
+            axis=1,
+        ),
+        wind_direction=lambda x: x["wind_direction"].apply(
+            lambda x: GeoSpatial.cardinal_direction_to_degrees(x)
+            if not pd.isna(x)
+            else pd.NA
+        ),
+        flight_wind_direction=lambda x: x.apply(
+            lambda x: np.cos(np.deg2rad(x["flight_direction"] - x["wind_direction"]))
+            if not pd.isna(x["wind_direction"])
+            else pd.NA,
+            axis=1,
+        ),
+        flight_wind_speed=lambda x: x["wind_speed"] * x["flight_wind_direction"],
+    )
+)
 
 # %%
 # Transform timestamps to cyclical features (sin, cos)

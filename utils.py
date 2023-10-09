@@ -25,8 +25,6 @@ from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
 from sklearn.mixture import GaussianMixture
 from sklearn.decomposition import PCA
 
-
-
 # class definitions for image clustering
 class KerasFeatureExtractor(BaseEstimator, TransformerMixin):
     def __init__(self, batch_size=32):
@@ -181,7 +179,8 @@ class GeoSpatial:
         geodesic = pyproj.Geod(ellps='WGS84')
         fwd_azimuth, _, _ = geodesic.inv(lon_1, lat_1, lon_2, lat_2)
 
-        return fwd_azimuth
+        # Negative azimuths are converted to positive
+        return fwd_azimuth + 360 if fwd_azimuth < 0 else fwd_azimuth
 
 class BrazilianHolidays:
     HOLIDAYS = [

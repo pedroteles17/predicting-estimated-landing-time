@@ -109,9 +109,7 @@ parsed_metar = (
             "station",
             "type",
             "wind",
-            "sky",
             "METAR",  # useless
-            "weather",  # Too many NaNs
         ],
         axis=1,
     )
@@ -127,14 +125,24 @@ clean_data = clean_data.merge(
 )\
     .drop(["original_metar"], axis=1)\
     .assign(
+        sky = lambda x: x["sky"].apply(lambda x: 0 if pd.isna(x) else 1),
+        weather = lambda x: x["weather"].apply(lambda x: 0 if pd.isna(x) else 1),
         wind_direction = lambda x: x["wind_direction"].apply(
-            lambda x: GeoSpatial.cardinal_direction_to_degrees(x) if not pd.isna(x) else 0
-        ),
+            lambda x: "N" if x in ["calm", "variable"] else x
+        ),  
+    )\
+    .assign(
         flight_direction = lambda x: x.apply(lambda x: GeoSpatial.direction_between_points(
             (BrazilianAirports.AIRPORT_INFO[x["origem"]]["lat"], BrazilianAirports.AIRPORT_INFO[x["origem"]]["lon"]), 
             (BrazilianAirports.AIRPORT_INFO[x["destino"]]["lat"], BrazilianAirports.AIRPORT_INFO[x["destino"]]["lon"])
         ), axis=1),
-        flight_wind_direction = lambda x: np.cos(np.deg2rad(x["flight_direction"] - x["wind_direction"])),
+        wind_direction = lambda x: x["wind_direction"].apply(
+            lambda x: GeoSpatial.cardinal_direction_to_degrees(x) if not pd.isna(x) else pd.NA
+        ),
+        flight_wind_direction = lambda x: x.apply(lambda x:
+            np.cos(np.deg2rad(x["flight_direction"] - x["wind_direction"])) if not pd.isna(x["wind_direction"]) else pd.NA,
+            axis=1
+        ),
         flight_wind_speed = lambda x: x["wind_speed"] * x["flight_wind_direction"],
     )
 

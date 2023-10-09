@@ -29,7 +29,7 @@
 
 * `03_feature_engineering.py`: This script carries out the feature engineering process. It generates two Parquet files: `train_df.parquet` and `test_df.parquet`. It's essential to run this code twice, once for training data and once for test data.
 
-* `04_modelling.py`: This script is used for training models and evaluating their performance. It produces a CSV file containing model predictions. Additionally, it implements a hyperparameter tuning process for the LightGBM model. The output file is named `submission_lightgbm.csv`.
+* `04_modelling.py`: This script is used for training models and evaluating their performance. It produces a CSV file containing model predictions. The output file is named `submission_lightgbm.csv`.
 
 # Data Availability Statement
 

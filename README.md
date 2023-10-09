@@ -64,7 +64,7 @@ The code was last run on a 4 core 11th Gen Intel Core i7-1165G7 laptop, with Win
 
 # Instructions
 
-Start by verifying that Python is installed on your system. Additionally, confirm that the folder containing your Python scripts serves as your current working directory. 
+Start by verifying that Python is installed on your system. Additionally, confirm that the folder containing your Python scripts serves as your current working directory. Futhermore, a `requirements.txt` file is provided to facilitate the installation of the necessary packages.
 
 Moreover, if you intend to access data from the API and retrieve METAR scores via OpenAI's API, ensure you have an `.env` file within the same folder as your Python scripts. This `.env` file should contain the necessary keys for the OpenAI API (`OPENAI_API_KEY`) and the ICEA API (`API_TOKEN`). If you don't want to provide these keys, you can use the Parquet files provided in the `data` folder.
 

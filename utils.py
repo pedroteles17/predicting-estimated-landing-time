@@ -16,100 +16,6 @@ from geopy.distance import great_circle
 from typing import Tuple
 import pyproj
 
-from tensorflow.keras.applications.vgg16 import preprocess_input, VGG16
-from tensorflow.keras.models import Model
-from tensorflow.keras.preprocessing.image import load_img
-from sklearn.base import BaseEstimator, TransformerMixin, ClusterMixin
-from sklearn.pipeline import Pipeline
-from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
-from sklearn.mixture import GaussianMixture
-from sklearn.decomposition import PCA
-
-# class definitions for image clustering
-class KerasFeatureExtractor(BaseEstimator, TransformerMixin):
-    def __init__(self, batch_size=32):
-        model = VGG16()
-        self.model = Model(inputs=model.inputs, outputs=model.layers[-2].output)
-        self.batch_size = batch_size
-
-    def fit(self, X):
-        return self
-
-    def transform(self, X):
-        n_samples = len(X)
-        n_batches = int(np.ceil(n_samples / self.batch_size))
-        features = []
-
-        for idx in range(n_batches):
-            start = idx * self.batch_size
-            end = (idx + 1) * self.batch_size
-            batch_images = X[start:end]
-            batch_features = self.process_batch(batch_images)
-            features.extend(batch_features)
-
-        return list(zip(X, np.vstack(features)))
-
-    def process_batch(self, batch_images):
-        batch_data = [preprocess_input(np.array(load_img(img, target_size=(224, 224)))) for img in batch_images]
-        batch_data = np.array(batch_data)
-        return self.model.predict(batch_data)
-
-
-class DimReducer(TransformerMixin, BaseEstimator):
-
-    def __init__(self, n_components=100, random_state=1):
-        self.n_components = n_components
-        self.random_state = random_state
-        self.pca = PCA(n_components=self.n_components, random_state=self.random_state)
-
-    def fit(self, X, y=None):
-        _, features = zip(*X)
-        self.pca.fit(features)
-        return self
-
-    def transform(self, X):
-        filenames, features = zip(*X)
-        reduced_features = self.pca.transform(features)
-        return list(zip(filenames, reduced_features))
-
-
-class ClusterKMeans(BaseEstimator, ClusterMixin):
-    def __init__(self, n_clusters=10):
-        self.n_clusters = n_clusters
-        self.kmeans = KMeans(n_clusters=self.n_clusters)
-
-    def fit(self, X, y=None):
-        filenames, features = zip(*X)
-        self.kmeans.fit(features)
-        self.labels_ = self.kmeans.labels_
-
-        self.groups = {}
-        for filename, label in zip(filenames, self.labels_):
-            if label not in self.groups:
-                self.groups[label] = []
-            self.groups[label].append(filename)
-
-        return self
-
-
-def get_image_clusters(img_path_list: str):
-
-    pipeline = Pipeline([
-      ("feature_extractor", KerasFeatureExtractor(batch_size=32)),
-      ("reducer", DimReducer()),
-      ("clustering", ClusterKMeans())
-    ])
-    pipeline.fit(img_path_list)
-
-    groups = pipeline.named_steps["clustering"].groups
-    dict_groups = {}
-    for group, group_items in groups.items():
-        for item in group_items:
-            dict_groups[item] = group
-
-    return dict_groups
-
-
 
 def calculate_expected_arrival(row):
     if pd.isna(row["estimated_departure"]) or pd.isna(row["origin_destiny_encode"]):
@@ -143,6 +49,7 @@ def number_of_flights_expected(
 
     return row_count
 
+
 class GeoSpatial:
     @staticmethod
     def cardinal_direction_to_degrees(cardinal_direction: str) -> float:
@@ -151,7 +58,7 @@ class GeoSpatial:
             "NNE",
             "NE",
             "ENE",
-            "E", 
+            "E",
             "ESE",
             "SE",
             "SSE",
@@ -166,21 +73,24 @@ class GeoSpatial:
         ]
 
         if cardinal_direction not in cardinal_directions:
-            return None   
+            return None
 
         return cardinal_directions.index(cardinal_direction) * 22.5
-    
+
     @staticmethod
-    def direction_between_points(point_1: Tuple[float, float], point_2: Tuple[float, float]) -> float:
+    def direction_between_points(
+        point_1: Tuple[float, float], point_2: Tuple[float, float]
+    ) -> float:
         # point_1 and point_2 are tuples with (lat, lon)
         lat_1, lon_1 = point_1
         lat_2, lon_2 = point_2
-        
-        geodesic = pyproj.Geod(ellps='WGS84')
+
+        geodesic = pyproj.Geod(ellps="WGS84")
         fwd_azimuth, _, _ = geodesic.inv(lon_1, lat_1, lon_2, lat_2)
 
         # Negative azimuths are converted to positive
         return fwd_azimuth + 360 if fwd_azimuth < 0 else fwd_azimuth
+
 
 class BrazilianHolidays:
     HOLIDAYS = [

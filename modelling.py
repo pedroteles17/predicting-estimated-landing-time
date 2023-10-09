@@ -101,26 +101,26 @@ X_train, y_train = (
 #%%
 # Hyperparameter optimization
 
-def hyperparameter_tuning_objective(trial):
+def hyperparameter_tuning_objective(trial: optuna.Trial) -> float:
     params = {
-        'objective': 'regression',
-        'metric': 'rmse',
-        'verbosity': -1,
-        'boosting_type': 'gbdt',
-        'lambda_l1': trial.suggest_float('lambda_l1', 1e-8, 10.0, log=True),
-        'lambda_l2': trial.suggest_float('lambda_l2', 1e-8, 10.0, log=True),
-        'num_leaves': trial.suggest_int('num_leaves', 2, 256),
-        'feature_fraction': trial.suggest_float('feature_fraction', 0.4, 1.0),
-        'bagging_fraction': trial.suggest_float('bagging_fraction', 0.4, 1.0),
-        'bagging_freq': trial.suggest_int('bagging_freq', 1, 7),
-        'min_child_samples': trial.suggest_int('min_child_samples', 5, 100),
+        "iterations": 1000,
+        "learning_rate": trial.suggest_float("learning_rate", 1e-3, 0.1, log=True),
+        "depth": trial.suggest_int("depth", 3, 10),
+        "subsample": trial.suggest_float("subsample", 0.05, 1.0),
+        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.05, 1.0),
+        "min_data_in_leaf": trial.suggest_int("min_data_in_leaf", 1, 100),
+        "l2_leaf_reg": trial.suggest_float('l2_leaf_reg', 1.0, 8),
+        'random_strength': trial.suggest_float('random_strength', 0, 10),
+        "eval_metric": "RMSE"
     }
 
-    gbm = lgb.LGBMRegressor(**params, importance_type="gain")
+    gbm = catboost.CatBoostRegressor(**params, silent=True)
+
     gbm.fit(X_train_val_input, y_train_val)
-    
-    y_pred = gbm.predict(X_val_input)
-    rmse = mean_squared_error(y_val, y_pred, squared=False)
+
+    preds = gbm.predict(X_val_input)
+    rmse = mean_squared_error(y_val, preds, squared=False)
+
     return rmse
 
 ## Get validation set
@@ -137,8 +137,8 @@ X_val_input = pd.DataFrame(imputer.transform(X_val))
 X_val_input.columns = X_val.columns
 
 ## Start hyperparameter optimization study
-study = optuna.create_study(direction='maximize')
-study.optimize(hyperparameter_tuning_objective, n_trials=1000)
+study = optuna.create_study(direction="minimize")
+study.optimize(hyperparameter_tuning_objective, n_trials=50)
 
 #del X_train_val, X_val, y_train_val, y_val, X_train_val_input, X_val_input
 
@@ -200,6 +200,8 @@ X_test = X_test.assign(
     axis=1,
 )
 
+X_test = X_test[X_train.columns]
+
 # %%
 # Create an instance of the IterativeImputer class
 imputer = IterativeImputer(max_iter=10, random_state=42)
@@ -221,7 +223,7 @@ X_test_input.columns = X_test.columns
 # Initialize the XGBoost Regressor
 #model = lgb.LGBMRegressor(importance_type="gain", random_state=42)
 #model = xgb.XGBRegressor(random_state=42)
-model = catboost.CatBoostRegressor(random_state=42)
+model = catboost.CatBoostRegressor()
 
 model.fit(X_train_input, y_train)
 

@@ -2,11 +2,7 @@
 import pandas as pd
 import numpy as np
 import duckdb
-from utils import (
-    number_of_flights_expected,
-    calculate_expected_arrival,
-    get_image_clusters,
-)
+from utils import number_of_flights_expected, calculate_expected_arrival
 from fancyimpute import IterativeImputer
 import xgboost as xgb
 import lightgbm as lgb
@@ -19,10 +15,6 @@ from sklearn.metrics import mean_squared_error
 import os
 
 tqdm.pandas()
-
-# %%
-import importlib
-import utils
 
 # %%
 train = pd.read_parquet("data/modelling/train_df.parquet").assign(
@@ -104,54 +96,6 @@ X_train, y_train = (
 )
 
 # %%
-# Hyperparameter optimization
-
-
-def hyperparameter_tuning_objective(trial: optuna.Trial) -> float:
-    params = {
-        "iterations": 1000,
-        "learning_rate": trial.suggest_float("learning_rate", 1e-3, 0.1, log=True),
-        "depth": trial.suggest_int("depth", 3, 10),
-        "subsample": trial.suggest_float("subsample", 0.05, 1.0),
-        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.05, 1.0),
-        "min_data_in_leaf": trial.suggest_int("min_data_in_leaf", 1, 100),
-        "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1.0, 8),
-        "random_strength": trial.suggest_float("random_strength", 0, 10),
-        "eval_metric": "RMSE",
-    }
-
-    gbm = catboost.CatBoostRegressor(**params, silent=True)
-
-    gbm.fit(X_train_val_input, y_train_val)
-
-    preds = gbm.predict(X_val_input)
-    rmse = mean_squared_error(y_val, preds, squared=False)
-
-    return rmse
-
-
-## Get validation set
-X_train_val, X_val, y_train_val, y_val = train_test_split(
-    X_train, y_train, test_size=0.2
-)
-
-## Imputer for train and validation
-imputer = IterativeImputer(max_iter=10, random_state=42)
-imputer.fit(X_train_val)
-
-X_train_val_input = pd.DataFrame(imputer.transform(X_train_val))
-X_train_val_input.columns = X_train_val.columns
-
-X_val_input = pd.DataFrame(imputer.transform(X_val))
-X_val_input.columns = X_val.columns
-
-## Start hyperparameter optimization study
-study = optuna.create_study(direction="minimize")
-study.optimize(hyperparameter_tuning_objective, n_trials=50)
-
-# del X_train_val, X_val, y_train_val, y_val, X_train_val_input, X_val_input
-
-# %%
 X_test = pd.read_parquet("data/modelling/test_df.parquet")
 
 X_test = X_test.assign(
@@ -230,9 +174,9 @@ X_test_input.columns = X_test.columns
 
 # %%
 # Initialize the XGBoost Regressor
-# model = lgb.LGBMRegressor(importance_type="gain", random_state=42)
-# model = xgb.XGBRegressor(random_state=42)
-model = catboost.CatBoostRegressor()
+model = lgb.LGBMRegressor()
+#model = xgb.XGBRegressor(random_state=42)
+#model = catboost.CatBoostRegressor()
 
 model.fit(X_train_input, y_train)
 
@@ -246,13 +190,12 @@ flight_pred = (
     flight_pred.assign(
         equal_airport=lambda x: pd.to_numeric(x["origem"] != x["destino"]),
         origin_destiny_encode=lambda x: x["origin_destiny_encode"].fillna(0),
-        y_pred=lambda x: (x["y_pred"] + x["origin_destiny_encode"])
-        * x["equal_airport"],
+        y_pred=lambda x: (x["y_pred"] + x["origin_destiny_encode"]) * x["equal_airport"],
     )
     .drop(["origem", "destino", "equal_airport", "origin_destiny_encode"], axis=1)
     .rename({"flightid": "id", "y_pred": "solution"}, axis=1)
 )
 
-flight_pred.to_csv("submission_catboost.csv", index=False)
+flight_pred.to_csv("submission_lightgbm.csv", index=False)
 
 # %%

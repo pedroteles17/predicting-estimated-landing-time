@@ -4,19 +4,14 @@ import numpy as np
 import duckdb
 from utils import number_of_flights_expected, calculate_expected_arrival
 from fancyimpute import IterativeImputer
-import xgboost as xgb
 import lightgbm as lgb
-import catboost
-import optuna
 from tqdm import tqdm
 import pandas._libs.missing as pd_missing
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
-import os
 
 tqdm.pandas()
 
 # %%
+# Before fitting the models, we must add some features that are sensitive to data leakage
 train = pd.read_parquet("data/modelling/train_df.parquet").assign(
     origin_destiny=lambda x: x["origem"] + "_" + x["destino"]
 )
@@ -96,6 +91,7 @@ X_train, y_train = (
 )
 
 # %%
+# We now deal with the test set as we did with the train set
 X_test = pd.read_parquet("data/modelling/test_df.parquet")
 
 X_test = X_test.assign(
@@ -173,16 +169,15 @@ X_test_input = pd.DataFrame(imputer.transform(X_test))
 X_test_input.columns = X_test.columns
 
 # %%
-# Initialize the XGBoost Regressor
-model = lgb.LGBMRegressor()
-#model = xgb.XGBRegressor(random_state=42)
-#model = catboost.CatBoostRegressor()
+# Initialize the LGBM Regressor
+model = lgb.LGBMRegressor(random_state=42)
 
 model.fit(X_train_input, y_train)
 
 y_pred = model.predict(X_test_input)
 
 # %%
+# Save preditcions to csv
 flight_pred = flight_info.copy()
 flight_pred["y_pred"] = y_pred
 

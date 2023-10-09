@@ -42,7 +42,6 @@ All the parquet files used to suport the findings of this study have been deposi
     - aiofiles==0.6.0
     - asyncio==stdlib
     - calendar==stdlib
-    - catboost==1.2.2
     - python-dotenv==1.0.0
     - duckdb==0.8.1
     - fancyimpute==0.7.0
@@ -52,7 +51,6 @@ All the parquet files used to suport the findings of this study have been deposi
     - metar==1.4
     - numpy==1.24.4
     - openai==0.27.2
-    - optuna==3.3.0
     - pandas==1.5.2
     - pickle==stdlib
     - pyproj==3.6.1
@@ -61,7 +59,6 @@ All the parquet files used to suport the findings of this study have been deposi
     - sklearn==1.1.1
     - tqdm==4.65.0
     - typing==stdlib
-    - xgboost==1.6.1
 
 The code was last run on a 4 core 11th Gen Intel Core i7-1165G7 laptop, with Windows version 11, 16 GB of RAM, and 512GB of SSD. Computation took several hours.
 

@@ -1,8 +1,11 @@
+library(bslib)
+library(DT)
 library(sodium)
 library(shinyauthr)
 library(shiny)
 library(shinydashboard)
 library(shinyjs)
+library(waiter)
 
 library(arrow)
 library(dplyr)
@@ -15,12 +18,17 @@ library(tidyr)
 library(MASS)
 library(lightgbm)
 library(xgboost)
+library(rpart)
 library(broom)
+
 
 # 1. Auxiliar function to run model
 
-X_train <- arrow::read_parquet("X_train_input.parquet")
-y_train <- arrow::read_parquet("y_train.parquet")[["excess_seconds_flying"]]
+X_train <- arrow::read_parquet("pseudoX_train.parquet")
+y_train <- arrow::read_parquet("pseudoy_train.parquet")[["excess_seconds_flying"]]
+
+X_test <- arrow::read_parquet("pseudoX_test.parquet")
+y_test <- arrow::read_parquet("pseudoy_test.parquet")[["excess_seconds_flying"]]
 
 invoke_model <- function(model_name, ...) {
   
@@ -28,10 +36,15 @@ invoke_model <- function(model_name, ...) {
   
   if (model_name == "Linear Regression") {
     
-    model <- lm(y ~ ., 
-                data = X_train %>% mutate(y = y_train))
-    feat_imp <- tidy(model) %>% dplyr::select(term, estimate) %>% filter(term != "(Intercept)")
-    rmse <- sqrt(mean(model$residuals^2))
+    feat_imp <- static_results[["Linear Regression"]][["FeatImp"]]
+    rmse <- static_results[["Linear Regression"]][["RMSE"]]
+    # model <- lm(y ~ ., 
+    #             data = X_train %>% mutate(y = y_train))
+    # 
+    # feat_imp <- tidy(model) %>% dplyr::select(term, estimate) %>% filter(term != "(Intercept)")
+    # 
+    # y_pred <- predict(model, X_test)
+    # rmse <- sqrt(mean((y_pred - y_test)^2))
     
   } else if (model_name == "XGBoost") {
     
@@ -39,9 +52,10 @@ invoke_model <- function(model_name, ...) {
                      objective = "reg:squarederror", nrounds = 2,
                      learning.rate = args[["learning_rate"]], num.leaves = args[["num_leaves"]],
                      n.estimators = args[["n_estimators"]])
-    
     feat_imp <- as_tibble(xgb.importance(model = model) %>% dplyr::select(Feature, Gain))
-    rmse <- max(model$evaluation_log[["train_rmse"]])
+    
+    y_pred <- predict(model, as.matrix(X_test))
+    rmse <- sqrt(mean((y_pred - y_test)^2))
   
   } else if (model_name == "LightGBM") {
     
@@ -58,26 +72,46 @@ invoke_model <- function(model_name, ...) {
     
     feat_imp <- as_tibble(lgb.importance(model = model) %>% dplyr::select(Feature, Gain))
     
-    y_pred <- predict(model, as.matrix(X_train))
-    rmse <- sqrt(mean((y_train - y_pred)^2))
+    y_pred <- predict(model, as.matrix(X_test))
+    rmse <- sqrt(mean((y_test - y_pred)^2))
     
   } else if (model_name == "Ridge") {
     
     model <- lm.ridge(y ~ ., 
                       data = X_train %>% mutate(y = y_train), lambda = args[["lambda"]])
-    y_pred <- as.matrix(X_train) %*% coef(model)[2:length(coef(model))] + coef(model)[1]
     
     feat_imp <- tibble(Feature = names(coef(model)),
                        Importance = as.numeric(coef(model))) %>% 
       filter(Feature != "")
     
-    rmse <- sqrt(mean((y_train - y_pred)^2))
+    y_pred <- predict(model, X_test)
+    rmse <- sqrt(mean((y_test - y_pred)^2))
+    
+  } else if (model_name == "Decision Tree") {
+    
+    # model <- rpart(y ~ ., data = X_train %>% mutate(y = y_train), method = "anova")
+    # 
+    # y_pred <- predict(model, newdata = X_test)
+    # rmse <- sqrt(mean((y_test - y_pred)^2))
+    # 
+    # feat_imp <- model$variable.importance
+    
+    feat_imp <- static_results[["Decision Tree"]][["FeatImp"]]
+    rmse <- static_results[["Decision Tree"]][["RMSE"]]
     
   }
   
   return (list(rmse, feat_imp))
 }
 # asd <- invoke_model("Linear Regression")
+
+
+# decisiontree_results <- invoke_model("Decision Tree")
+# linreg_results <- invoke_model("Linear Regression")
+static_results <- list(`Decision Tree` = list(RMSE = 352.379,
+                                              FeatImp = readr::read_csv("featimp_decisiontree.csv")),
+                       `Linear Regression` = list(RMSE = 356.0661,
+                                                  FeatImp = readr::read_csv("featimp_linreg.csv")))
 
 # 2. Descritivas
 
@@ -95,7 +129,11 @@ aux_plot_binary <- function (feature) {
     geom_col() +
     scale_y_continuous(labels = scales::percent_format(scale = 100)) +
     ggthemes::theme_fivethirtyeight() +
-    labs(title = glue::glue("Relative frequency of \n {feature}"), x = feature, y = "Frequency")
+    labs(title = glue::glue("Relative frequency of \n {feature}"), x = feature, y = "Frequency") +
+    theme(
+      panel.background = element_rect(fill = "#f5f5f5", colour = NA),
+      plot.background = element_rect(fill = "#f5f5f5", colour = NA),
+    )
 }
 aux_plot_discrete <- function (feature) {
   X_train %>% 
@@ -103,14 +141,22 @@ aux_plot_discrete <- function (feature) {
     geom_bar() +
     ggthemes::theme_fivethirtyeight() +
     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-    labs(title = glue::glue("Absolute frequency of \n {feature}"), x = feature, y = "Frequency")
+    labs(title = glue::glue("Absolute frequency of \n {feature}"), x = feature, y = "Frequency") +
+    theme(
+      panel.background = element_rect(fill = "#f5f5f5", colour = NA),
+      plot.background = element_rect(fill = "#f5f5f5", colour = NA),
+    )
 }
 aux_plot_continuous <- function (feature) {
   X_train %>% 
     ggplot(aes(x = .data[[feature]])) +
     geom_histogram() +
     ggthemes::theme_fivethirtyeight() +
-    labs(title = glue::glue("Histogram of \n {feature}"), x = feature, y = "Frequency")
+    labs(title = glue::glue("Histogram of \n {feature}"), x = feature, y = "Frequency") +
+    theme(
+      panel.background = element_rect(fill = "#f5f5f5", colour = NA),
+      plot.background = element_rect(fill = "#f5f5f5", colour = NA),
+    )
 }
 
 aux_plot_combined <- function (continuous_var, binary_var, plot_type) {
@@ -128,19 +174,39 @@ aux_plot_combined <- function (continuous_var, binary_var, plot_type) {
       geom_violin(aes(y = factor(.data[[binary_var]]), x = .data[[continuous_var]]))
   }
   g + labs(title = glue::glue("Plot of {continuous_var} according to {binary_var}")) +
-    ggthemes::theme_fivethirtyeight()
+    ggthemes::theme_fivethirtyeight() +
+    theme(
+      panel.background = element_rect(fill = "#f5f5f5", colour = NA),
+      plot.background = element_rect(fill = "#f5f5f5", colour = NA),
+    )
 }
-# aux_plot_combined("temperature", "is_forecast", "Violin")
+
+# Getting desc stats for variables ----
+
+get_stats <- function (variable, type_var) {
+  tibble(Type = type_var,
+         Variable = variable,
+         `N values` = length(unique(X_train[[variable]])),
+         Mean = mean(X_train[[variable]]),
+         Sd = sd(X_train[[variable]]),
+         Min = min(X_train[[variable]]),
+         Q1 = quantile(X_train[[variable]])[2],
+         Median = median(X_train[[variable]]),
+         Q3 = quantile(X_train[[variable]])[4],
+         Max = max(X_train[[variable]]))
+}
+table_stats <- bind_rows(map_dfr(desc_variables$Discrete, get_stats, "Discrete"),
+                         map_dfr(desc_variables$Continuous, get_stats, "Continuous"))
+
 # 0.0. UI ----
 
 ui <- dashboardPage(
-  
-  #theme = bs_theme(version = 4, bootswatch = "minty"),
+
   skin = "blue",
   
   ## 0.1. Header ----
   dashboardHeader(
-    title = "Cloud9",
+    title = "Cloud9  -  ITA DSC 2023",
     titleWidth = 350,
     tags$li(
       class = "dropdown",
@@ -159,15 +225,32 @@ ui <- dashboardPage(
   ),
   ## 0.3. Body ----
   dashboardBody(
-    # loginUI(
-    #   "login",
-    #   #cookie_expiry = 7
-    # ),
+    theme = bs_theme(version = 4, bootswatch = "united"),
+    id = "dashboard_body",
+    tags$head(tags$style(HTML("
+      .content-wrapper {
+        min-height: 150vh !important;
+        background-color: #f5f5f5 !important; 
+      }
+      
+      table.dataTable thead th {
+      background-color: #333;
+      color: white;
+    }
+    "))),
+    
+    autoWaiter(),
+    
+    loginUI(
+      "login",
+      #cookie_expiry = 7
+    ),
     tabsetPanel(
       type = "tabs",
       id = "tab_selected",
       tabPanel(title = "Modelos"),
-      tabPanel(title = "Descritivas")
+      tabPanel(title = "Descritivas"),
+      tabPanel(title = "Tabelas")
     ),
     
     uiOutput("body")
@@ -197,7 +280,11 @@ plot_feat_imp <- function (model_name, feat_imp) {
     ggplot(aes(x = reorder(Feature, Importance), y = Importance)) +
     geom_col() +
     coord_flip() +
-    ggthemes::theme_fivethirtyeight()
+    ggthemes::theme_fivethirtyeight() +
+    theme(
+      panel.background = element_rect(fill = "#f5f5f5", colour = NA),
+      plot.background = element_rect(fill = "#f5f5f5", colour = NA),
+    )
   
   if (!(model_name %in% c("Linear Regression", "Ridge"))) {
     g <- g + scale_y_continuous(labels = scales::percent_format(scale = 100)) +
@@ -257,9 +344,13 @@ auth_fun <- function () {
   observeEvent(credentials()$user_auth, {
     
     hideTab(inputId = "tab_selected", target = "Modelos")
+    hideTab(inputId = "tab_selected", target = "Descritivas")
+    hideTab(inputId = "tab_selected", target = "Tabelas")
     
     if (credentials()$user_auth) {
       showTab(inputId = "tab_selected", target = "Modelos")
+      showTab(inputId = "tab_selected", target = "Descritivas")
+      showTab(inputId = "tab_selected", target = "Tabelas")
     }
   })
   
@@ -270,7 +361,10 @@ auth_fun <- function () {
 
 server <- function(input, output, session) {
   
-  # credentials <- auth_fun()
+  waiter_obj <- Waiter$new(id = "dashboard_body",
+                           html = tagList(spin_ellipsis(), h4("Fitting model. This sould take some seconds.")))
+  
+  credentials <- auth_fun()
   
   # 2.0. User Inputs ----
   
@@ -279,7 +373,7 @@ server <- function(input, output, session) {
     selectInput(
       inputId = "which_model",
       label = "Which model?",
-      choices = c("Linear Regression", "XGBoost", "LightGBM"),
+      choices = c("Linear Regression", "XGBoost", "LightGBM", "Decision Tree"),
       selected = "LightGBM"
     )
   })
@@ -288,7 +382,11 @@ server <- function(input, output, session) {
   output$learning_rate <- renderUI({
     req(input$which_model)
     
-    if(input$which_model == "Linear Regression"){
+    if (is.null(input$which_model)) {
+      return(NULL)
+    }
+    
+    if(input$which_model %in% c("Linear Regression", "Decision Tree")) {
       NULL
     } else if (input$which_model == "Ridge") {
       div(
@@ -321,10 +419,11 @@ server <- function(input, output, session) {
   
   # 3.0. UI Sidebar Output ----
   output$sidebar <- renderUI({
-    # req(credentials()$user_auth, input$tab_selected)
-    
+  
+    req(credentials()$user_auth, input$tab_selected)
+
     if( input$tab_selected == "Modelos" ){
-      div(
+      div(align = "center",
         br(),
         uiOutput("which_model"),
         # uiOutput("additional_params"),
@@ -333,11 +432,20 @@ server <- function(input, output, session) {
         uiOutput("max_depth"),
         uiOutput("n_estimators"),
         uiOutput("lambda"),
-        uiOutput("run_model")
-      )}
+        uiOutput("run_model"),
+        br(),
+        div(style = "font-size: 10px;",
+            "Models should take just some seconds to run, but higher values for the hyperparameters will naturally increase the required time.")
+      )
+      
+      }
   })
   
   output$body <- renderUI({
+    
+    if (is.null(input$tab_selected)) {
+      return(NULL)
+    }
     
     if( input$tab_selected == "Modelos" ) {
       column(width = 12, align = "center",
@@ -378,6 +486,13 @@ server <- function(input, output, session) {
                              plotOutput("plot_single_bin_var", height = "270px")
              )
       )
+    } else {
+      
+      div(align = "center",
+        h2("Stats", align = "center"),
+        DTOutput("table_stats")
+      )
+      
     }
     
     
@@ -392,6 +507,8 @@ server <- function(input, output, session) {
                                         `Num Estimators` = numeric(0),
                                         RMSE = numeric(0)))
   observeEvent(input$run_model, {
+    
+    waiter_obj$show()
     
     possible_params <- c("learning_rate", "num_leaves", "max_depth", "n_estimators", "lambda")
     args_model <- list()
@@ -408,7 +525,9 @@ server <- function(input, output, session) {
     model_rmse <- model_list_values[[1]]
     model_feat_imp_plot <- plot_feat_imp(input$which_model, model_list_values[[2]])
     
-    if (input$which_model == "Linear Regression") {
+    waiter_obj$hide()
+    
+    if (input$which_model %in% c("Linear Regression", "Decision Tree")) {
       learning_rate <- NA
       num_leaves <- NA
       max_depth <- NA
@@ -443,7 +562,10 @@ server <- function(input, output, session) {
     
   })
   
-  # plots in the section 'Descritive'
+  # plots and stats in the section 'Descritive'
+  output$table_stats <- renderDT(table_stats %>% mutate(across(where(is.numeric), ~round(.x, 2))))
+  
+  
   # select_continuous_var <- reactive({input$select_continuous_var})
   output$plot_single_cont_var <- renderPlot(aux_plot_continuous(input$select_continuous_var), height = 250)
   output$plot_single_bin_var <- renderPlot(aux_plot_binary(input$select_binary_var), height = 250)

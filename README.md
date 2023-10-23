@@ -31,6 +31,8 @@
 
 * `04_modelling.py`: This script is used for training models and evaluating their performance. It produces a CSV file containing model predictions. The output file is named `submission_lightgbm.csv`.
 
+* `shiny_etl`: This folder contains the code and data used to generate the Shiny app. It's not necessary for the replication of the study, just for the app's development.
+
 # Data Availability Statement
 
 All the parquet files used to suport the findings of this study have been deposited in the `data` folder. However, by uncommenting the code in the `01_fetch_clean_data.py` script, the data can be fetched directly from the API.

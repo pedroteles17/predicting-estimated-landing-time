@@ -10,6 +10,7 @@ library(waiter)
 library(arrow)
 library(dplyr)
 library(ggplot2)
+library(plotly)
 library(ggthemes)
 library(purrr)
 library(tibble)
@@ -21,14 +22,16 @@ library(xgboost)
 library(rpart)
 library(broom)
 
+source("99_functions.R")
+
 
 # 1. Auxiliar function to run model
 
-X_train <- arrow::read_parquet("pseudoX_train.parquet")
-y_train <- arrow::read_parquet("pseudoy_train.parquet")[["excess_seconds_flying"]]
+X_train <- arrow::read_parquet("data/pseudoX_train.parquet")
+y_train <- arrow::read_parquet("data/pseudoy_train.parquet")[["excess_seconds_flying"]]
 
-X_test <- arrow::read_parquet("pseudoX_test.parquet")
-y_test <- arrow::read_parquet("pseudoy_test.parquet")[["excess_seconds_flying"]]
+X_test <- arrow::read_parquet("data/pseudoX_test.parquet")
+y_test <- arrow::read_parquet("data/pseudoy_test.parquet")[["excess_seconds_flying"]]
 
 invoke_model <- function(model_name, ...) {
   
@@ -36,15 +39,13 @@ invoke_model <- function(model_name, ...) {
   
   if (model_name == "Linear Regression") {
     
-    feat_imp <- static_results[["Linear Regression"]][["FeatImp"]]
-    rmse <- static_results[["Linear Regression"]][["RMSE"]]
-    # model <- lm(y ~ ., 
-    #             data = X_train %>% mutate(y = y_train))
-    # 
-    # feat_imp <- tidy(model) %>% dplyr::select(term, estimate) %>% filter(term != "(Intercept)")
-    # 
-    # y_pred <- predict(model, X_test)
-    # rmse <- sqrt(mean((y_pred - y_test)^2))
+     model <- lm(y ~ ., 
+                 data = X_train %>% mutate(y = y_train))
+     
+     feat_imp <- tidy(model) %>% dplyr::select(term, estimate) %>% filter(term != "(Intercept)")
+     
+     y_pred <- predict(model, X_test)
+     rmse <- sqrt(mean((y_pred - y_test)^2))
     
   } else if (model_name == "XGBoost") {
     
@@ -56,7 +57,7 @@ invoke_model <- function(model_name, ...) {
     
     y_pred <- predict(model, as.matrix(X_test))
     rmse <- sqrt(mean((y_pred - y_test)^2))
-  
+    
   } else if (model_name == "LightGBM") {
     
     train_data <- lightgbm::lgb.Dataset(data = as.matrix(X_train), label = as.numeric(y_train))
@@ -75,133 +76,79 @@ invoke_model <- function(model_name, ...) {
     y_pred <- predict(model, as.matrix(X_test))
     rmse <- sqrt(mean((y_test - y_pred)^2))
     
-  } else if (model_name == "Ridge") {
+  } else if (model_name == "Ridge Regression") {
+    
+    X_train_scaled <- X_train %>% 
+      mutate(across(
+        where(is.numeric), 
+        ~ (.-mean(.))/sd(.)
+      ))
+    
+    X_test_scaled <- X_test %>% 
+      mutate(across(
+        where(is.numeric), 
+        ~ (.-mean(.))/sd(.)
+      ))
     
     model <- lm.ridge(y ~ ., 
-                      data = X_train %>% mutate(y = y_train), lambda = args[["lambda"]])
+                      data = X_train_scaled %>% mutate(y = y_train), lambda = args[["lambda"]])
     
     feat_imp <- tibble(Feature = names(coef(model)),
                        Importance = as.numeric(coef(model))) %>% 
       filter(Feature != "")
     
-    y_pred <- predict(model, X_test)
+    y_pred <- as.matrix(cbind(const=1,X_test_scaled)) %*% coef(model)
     rmse <- sqrt(mean((y_test - y_pred)^2))
     
   } else if (model_name == "Decision Tree") {
     
-    # model <- rpart(y ~ ., data = X_train %>% mutate(y = y_train), method = "anova")
-    # 
-    # y_pred <- predict(model, newdata = X_test)
-    # rmse <- sqrt(mean((y_test - y_pred)^2))
-    # 
-    # feat_imp <- model$variable.importance
+    model <- rpart(y ~ ., data = X_train %>% mutate(y = y_train), method = "anova",
+                   control = rpart.control(maxdepth=args$max_depth, cp=0))
     
-    feat_imp <- static_results[["Decision Tree"]][["FeatImp"]]
-    rmse <- static_results[["Decision Tree"]][["RMSE"]]
+    y_pred <- predict(model, newdata = X_test)
+    rmse <- sqrt(mean((y_test - y_pred)^2))
+     
+    feat_imp <- tibble(Feature = names(model$variable.importance),
+                       Importance = as.numeric(model$variable.importance))
     
   }
   
   return (list(rmse, feat_imp))
 }
-# asd <- invoke_model("Linear Regression")
-
-
-# decisiontree_results <- invoke_model("Decision Tree")
-# linreg_results <- invoke_model("Linear Regression")
-static_results <- list(`Decision Tree` = list(RMSE = 352.379,
-                                              FeatImp = readr::read_csv("featimp_decisiontree.csv")),
-                       `Linear Regression` = list(RMSE = 356.0661,
-                                                  FeatImp = readr::read_csv("featimp_linreg.csv")))
 
 # 2. Descritivas
+desc_variables <- list(Binary = c(
+                         'tcr', 'tcp', 'is_forecast', 'destino_SBBR', 'destino_SBCF', 
+                         'destino_SBCT', 'destino_SBFL', 'destino_SBGL', 'destino_SBGR', 
+                         'destino_SBKP', 'destino_SBPA', 'destino_SBRF', 'destino_SBRJ', 
+                         'destino_SBSP', 'destino_SBSV'),
+                       Continuous = c(
+                         'days_to_holiday', 'distance_from_airports', 'metar_overall_score', 
+                         'metar_wind_score', 'metar_visibility_score', 'metar_cloud_cover_score', 
+                         'metar_dew_point_spread_score', 'metar_altimeter_setting_score', 
+                         'metar_temperature_score', 'temperature', 'dew_point', 'visibility', 
+                         'pressure', 'wind_direction', 'flight_direction', 'wind_speed', 
+                         'flight_wind_direction', 'flight_wind_speed', 'number_flights_arriving', 
+                         'number_flights_departing', 'minute_sin', 'minute_cos', 'hour_sin', 
+                         'hour_cos', 'day_sin', 'day_cos', 'week_sin', 'week_cos', 'month_sin',
+                         'month_cos', 'runway_length', 'elevation', 'esperas', 'runway_number'))
 
-desc_variables <- list(Binary = c('tcr', 'tcp', 'is_forecast', 'runway_number'),
-                       Discrete = c('runway_length', 'elevation', 'esperas'),
-                       Continuous = c('days_to_holiday', 'distance_from_airports', 'metar_overall_score', 'metar_wind_score', 'metar_visibility_score', 'metar_cloud_cover_score', 'metar_dew_point_spread_score', 'metar_altimeter_setting_score', 'metar_temperature_score', 'temperature', 'dew_point', 'visibility', 'pressure', 'wind_direction', 'flight_direction', 'wind_speed', 'flight_wind_direction', 'flight_wind_speed', 'number_flights_arriving', 'number_flights_departing'))
+names(desc_variables$Binary) <- map_chr(desc_variables$Binary, snake_to_clean_names)
+names(desc_variables$Continuous) <- map_chr(desc_variables$Continuous, snake_to_clean_names)
 
-aux_plot_binary <- function (feature) {
-  if (all(sort(unique(X_train[[feature]])) == c(0, 1))) {
-    X_train <- X_train %>% mutate(feature := ifelse(!!sym(feature) == 0, "False", "True"))
-  }
-  X_train %>% 
-    count(!!sym(feature)) %>% mutate(Freq = n / sum(n)) %>% 
-    ggplot(aes(x = factor(.data[[feature]]), y = Freq)) + 
-    geom_col() +
-    scale_y_continuous(labels = scales::percent_format(scale = 100)) +
-    ggthemes::theme_fivethirtyeight() +
-    labs(title = glue::glue("Relative frequency of \n {feature}"), x = feature, y = "Frequency") +
-    theme(
-      panel.background = element_rect(fill = "#f5f5f5", colour = NA),
-      plot.background = element_rect(fill = "#f5f5f5", colour = NA),
-    )
-}
-aux_plot_discrete <- function (feature) {
-  X_train %>% 
-    ggplot(aes(x = factor(.data[[feature]]))) +
-    geom_bar() +
-    ggthemes::theme_fivethirtyeight() +
-    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-    labs(title = glue::glue("Absolute frequency of \n {feature}"), x = feature, y = "Frequency") +
-    theme(
-      panel.background = element_rect(fill = "#f5f5f5", colour = NA),
-      plot.background = element_rect(fill = "#f5f5f5", colour = NA),
-    )
-}
-aux_plot_continuous <- function (feature) {
-  X_train %>% 
-    ggplot(aes(x = .data[[feature]])) +
-    geom_histogram() +
-    ggthemes::theme_fivethirtyeight() +
-    labs(title = glue::glue("Histogram of \n {feature}"), x = feature, y = "Frequency") +
-    theme(
-      panel.background = element_rect(fill = "#f5f5f5", colour = NA),
-      plot.background = element_rect(fill = "#f5f5f5", colour = NA),
-    )
-}
+desc_variables$Binary <- desc_variables$Binary[order(names(desc_variables$Binary))]
+desc_variables$Continuous <- desc_variables$Continuous[order(names(desc_variables$Continuous))]
 
-aux_plot_combined <- function (continuous_var, binary_var, plot_type) {
-  print(plot_type)
-  g <- ggplot(X_train)
-  if (plot_type == "Histogram") {
-    g <- g + 
-      geom_histogram(aes(x = .data[[continuous_var]])) +
-      facet_wrap(~.data[[binary_var]])
-  } else if (plot_type == "Boxplot") {
-    g <- g + 
-      geom_boxplot(aes(group = factor(.data[[binary_var]]), y = .data[[continuous_var]]))
-  } else if (plot_type == "Violin") {
-    g <- g + 
-      geom_violin(aes(y = factor(.data[[binary_var]]), x = .data[[continuous_var]]))
-  }
-  g + labs(title = glue::glue("Plot of {continuous_var} according to {binary_var}")) +
-    ggthemes::theme_fivethirtyeight() +
-    theme(
-      panel.background = element_rect(fill = "#f5f5f5", colour = NA),
-      plot.background = element_rect(fill = "#f5f5f5", colour = NA),
-    )
-}
 
 # Getting desc stats for variables ----
 
-get_stats <- function (variable, type_var) {
-  tibble(Type = type_var,
-         Variable = variable,
-         `N values` = length(unique(X_train[[variable]])),
-         Mean = mean(X_train[[variable]]),
-         Sd = sd(X_train[[variable]]),
-         Min = min(X_train[[variable]]),
-         Q1 = quantile(X_train[[variable]])[2],
-         Median = median(X_train[[variable]]),
-         Q3 = quantile(X_train[[variable]])[4],
-         Max = max(X_train[[variable]]))
-}
-table_stats <- bind_rows(map_dfr(desc_variables$Discrete, get_stats, "Discrete"),
-                         map_dfr(desc_variables$Continuous, get_stats, "Continuous"))
+table_stats <- bind_rows(map_dfr(desc_variables$Binary, \(x) get_stats(X_train, x, 'Binary')),
+                         map_dfr(desc_variables$Continuous, \(x) get_stats(X_train, x, 'Continuous')))
 
 # 0.0. UI ----
 
 ui <- dashboardPage(
-
+  
   skin = "blue",
   
   ## 0.1. Header ----
@@ -234,7 +181,7 @@ ui <- dashboardPage(
       }
       
       table.dataTable thead th {
-      background-color: #333;
+      background-color: darkblue;
       color: white;
     }
     "))),
@@ -260,105 +207,6 @@ ui <- dashboardPage(
 
 # 2. Server ----
 
-
-plot_feat_imp <- function (model_name, feat_imp) {
-  
-  colnames(feat_imp) <- c("Feature", "Importance")
-  feat_imp <- feat_imp %>% arrange(desc(Importance))
-  
-  if (!(model_name %in% c("Linear Regression", "Ridge"))) {
-    feat_imp <- feat_imp %>% 
-      mutate(Importance = Importance / sum(Importance)) %>%
-      dplyr::slice(1:10)
-    feat_imp <- feat_imp %>%  add_row(Feature = "Others", Importance = 1 - sum(feat_imp$Importance))
-    
-  } else {
-    feat_imp <- feat_imp %>% dplyr::slice(1:10)
-  }
-  
-  g <- feat_imp %>% 
-    ggplot(aes(x = reorder(Feature, Importance), y = Importance)) +
-    geom_col() +
-    coord_flip() +
-    ggthemes::theme_fivethirtyeight() +
-    theme(
-      panel.background = element_rect(fill = "#f5f5f5", colour = NA),
-      plot.background = element_rect(fill = "#f5f5f5", colour = NA),
-    )
-  
-  if (!(model_name %in% c("Linear Regression", "Ridge"))) {
-    g <- g + scale_y_continuous(labels = scales::percent_format(scale = 100)) +
-      labs(title = "Features by importance", x = "Feature", y = "Importance (%)")
-  } else {
-    g <- g + labs(title = "Absolute impact of features", x = "Feature", y = "Impact")
-  }
-  
-  return(g)
-}
-
-# login set up and authentication
-auth_fun <- function () {
-  
-  # 1.0. Login setup ----
-  
-  user_base <- tibble(
-    user = c("DSC2023"),
-    password = c("ITA-ICEA-LATAM"),
-    password_hash = sapply(c("ITA-ICEA-LATAM"), sodium::password_store),
-    permissions = c("standard"),
-    name = c("Organizadores")
-  )
-  
-  # call login module supplying data frame, user and password cols and reactive trigger
-  credentials <- shinyauthr::loginServer(
-    id = "login",
-    data = user_base,
-    user_col = user,
-    pwd_col = password_hash,
-    sodium_hashed = TRUE,
-    #cookie_logins = TRUE, # TRUE if sessionif, cookie_getter is provided
-    log_out = reactive(logout_init()),
-    #sessionid_col = sessionid,
-    #cookie_getter = get_sessionids_from_db,
-    #cookie_setter = add_sessionid_to_db
-  )
-  
-  # call the logout module with reactive trigger to hide/show
-  logout_init <- shinyauthr::logoutServer(
-    id = "logout",
-    active = reactive(credentials()$user_auth)
-  )
-  
-  observe({
-    if (credentials()$user_auth) {
-      shinyjs::removeClass(selector = "body", class = "sidebar-collapse")
-    } else {
-      shinyjs::addClass(selector = "body", class = "sidebar-collapse")
-    }
-  })
-  
-  user_info <- reactive({
-    credentials()$info
-  })
-  
-  observeEvent(credentials()$user_auth, {
-    
-    hideTab(inputId = "tab_selected", target = "Modelos")
-    hideTab(inputId = "tab_selected", target = "Descritivas")
-    hideTab(inputId = "tab_selected", target = "Tabelas")
-    
-    if (credentials()$user_auth) {
-      showTab(inputId = "tab_selected", target = "Modelos")
-      showTab(inputId = "tab_selected", target = "Descritivas")
-      showTab(inputId = "tab_selected", target = "Tabelas")
-    }
-  })
-  
-  return(credentials)
-  
-  
-}
-
 server <- function(input, output, session) {
   
   waiter_obj <- Waiter$new(id = "dashboard_body",
@@ -373,7 +221,7 @@ server <- function(input, output, session) {
     selectInput(
       inputId = "which_model",
       label = "Which model?",
-      choices = c("Linear Regression", "XGBoost", "LightGBM", "Decision Tree"),
+      choices = c("Linear Regression", "Ridge Regression", "XGBoost", "LightGBM", "Decision Tree"),
       selected = "LightGBM"
     )
   })
@@ -386,9 +234,13 @@ server <- function(input, output, session) {
       return(NULL)
     }
     
-    if(input$which_model %in% c("Linear Regression", "Decision Tree")) {
+    if(input$which_model %in% c("Linear Regression")) {
       NULL
-    } else if (input$which_model == "Ridge") {
+    } else if (input$which_model == "Decision Tree"){
+      div(
+        numericInput(inputId = "max_depth", label = "Maximum depth of tree", value = 6, step = 1, min = 2),
+      )
+    } else if (input$which_model == "Ridge Regression") {
       div(
         numericInput(inputId = "lambda", label = "Lambda", value = 0.1, step = 0.01, min = 0, max = 1),
       )
@@ -419,26 +271,26 @@ server <- function(input, output, session) {
   
   # 3.0. UI Sidebar Output ----
   output$sidebar <- renderUI({
-  
+    
     req(credentials()$user_auth, input$tab_selected)
-
+    
     if( input$tab_selected == "Modelos" ){
       div(align = "center",
-        br(),
-        uiOutput("which_model"),
-        # uiOutput("additional_params"),
-        uiOutput("learning_rate"),
-        uiOutput("num_leaves"),
-        uiOutput("max_depth"),
-        uiOutput("n_estimators"),
-        uiOutput("lambda"),
-        uiOutput("run_model"),
-        br(),
-        div(style = "font-size: 10px;",
-            "Models should take just some seconds to run, but higher values for the hyperparameters will naturally increase the required time.")
+          br(),
+          uiOutput("which_model"),
+          # uiOutput("additional_params"),
+          uiOutput("learning_rate"),
+          uiOutput("num_leaves"),
+          uiOutput("max_depth"),
+          uiOutput("n_estimators"),
+          uiOutput("lambda"),
+          uiOutput("run_model"),
+          br(),
+          div(style = "font-size: 10px;",
+              "Models should take just some seconds to run, but higher values for the hyperparameters will naturally increase the required time.")
       )
       
-      }
+    }
   })
   
   output$body <- renderUI({
@@ -449,48 +301,37 @@ server <- function(input, output, session) {
     
     if( input$tab_selected == "Modelos" ) {
       column(width = 12, align = "center",
-             column(width = 6, align = "center", tableOutput("table_rmse")),
-             column(width = 6, align = "center", plotOutput("plot_feat_imp"))
+             column(width = 12, align = "center", DTOutput("table_rmse")),
+             column(width = 12, align = "center", plotlyOutput("plot_feat_imp"))
       )
     } else if (input$tab_selected == "Descritivas") {
-      
       column(width = 12, align = "center",
              br(),
              
-             column(width = 4, align = "center",
-
+             column(width = 6, align = "center",
+                    
                     fluidRow(selectInput(inputId = "select_continuous_var", label = "Plot of continuous variable",
                                          choices = desc_variables$Continuous, selected = "temperature"),
-                             plotOutput("plot_single_cont_var", height = "270px")),
-
-                    fluidRow(div(h4("Grouped plot"),
-                                  selectInput(inputId = "comb_plot_continuous", label = "Choose a continuous variable", choices = desc_variables$Continuous),
-                                  selectInput(inputId = "comb_plot_binary", label = "Choose a binary variable", choices = desc_variables$Binary),
-                                  selectInput(inputId = "comb_plot_type", label = "Choose the plot's type", choices = c("Histogram", "Violin", "Boxplot"))
-                                    ))),
-
-             column(width = 4, align = "center",
-
-                    fluidRow(selectInput(inputId = "select_discrete_var", label = "Plot of discrete variable",
-                                         choices = desc_variables$Discrete, selected = "elevation"),
-                             plotOutput("plot_single_disc_var", height = "270px")),
-
-                    plotOutput("plot_combined_var")
+                             plotlyOutput("plot_single_cont_var", height = "270px")),
                     
-                    ),
-
-             column(width = 4, align = "center",
-
+                    fluidRow(div(h4("Grouped plot"),
+                                 selectInput(inputId = "comb_plot_continuous", label = "Choose a continuous variable", choices = desc_variables$Continuous),
+                                 selectInput(inputId = "comb_plot_binary", label = "Choose a binary variable", choices = desc_variables$Binary),
+                                 selectInput(inputId = "comb_plot_type", label = "Choose the plot's type", choices = c("Histogram", "Violin", "Boxplot"))
+                    ))),
+             
+             column(width = 6, align = "center",
+                    
                     selectInput(inputId = "select_binary_var", label = "Plot of binary variable",
-                                         choices = desc_variables$Binary, selected = "tcr"),
-                             plotOutput("plot_single_bin_var", height = "270px")
+                                choices = desc_variables$Binary, selected = "tcr"),
+                    plotlyOutput("plot_single_bin_var", height = "270px")
              )
       )
     } else {
       
       div(align = "center",
-        h2("Stats", align = "center"),
-        DTOutput("table_stats")
+          h2("Stats", align = "center"),
+          DTOutput("table_stats")
       )
       
     }
@@ -527,10 +368,20 @@ server <- function(input, output, session) {
     
     waiter_obj$hide()
     
-    if (input$which_model %in% c("Linear Regression", "Decision Tree")) {
+    if (input$which_model == "Linear Regression") {
       learning_rate <- NA
       num_leaves <- NA
       max_depth <- NA
+      num_estimators <- NA
+    } else if (input$which_model == "Ridge Regression"){
+      learning_rate <- input$lambda
+      num_leaves <- NA
+      max_depth <- NA
+      num_estimators <- NA
+    } else if (input$which_model == "Decision Tree"){
+      learning_rate <- NA
+      num_leaves <- NA
+      max_depth <- input$max_depth
       num_estimators <- NA
     } else if (input$which_model == "XGBoost") {
       learning_rate <- input$learning_rate
@@ -543,7 +394,7 @@ server <- function(input, output, session) {
       max_depth <- input$max_depth
       num_estimators <- input$n_estimators
     }
-      
+    
     # RMSE table
     rmse_table_data() %>% 
       mutate(Model = "Previous") %>% 
@@ -553,29 +404,33 @@ server <- function(input, output, session) {
               `Num Leaves` = num_leaves,
               `Max Depth` = max_depth,
               `Num Estimators` = num_estimators,
-              RMSE = model_rmse,
+              RMSE = round(model_rmse, 2),
               .before = 1) %>% 
       rmse_table_data()
-    output$table_rmse <- renderTable({rmse_table_data()})
+    output$table_rmse <- renderDT({rmse_table_data()})
     
-    output$plot_feat_imp <- renderPlot(model_feat_imp_plot)
+    output$plot_feat_imp <- renderPlotly(model_feat_imp_plot)
     
   })
   
   # plots and stats in the section 'Descritive'
-  output$table_stats <- renderDT(table_stats %>% mutate(across(where(is.numeric), ~round(.x, 2))))
+  output$table_stats <- renderDT({
+    table_stats %>% 
+      mutate(across(where(is.numeric), ~round(.x, 2))) %>% 
+      mutate(Feature = sapply(Feature, snake_to_clean_names)) %>% 
+      arrange(desc(Feature))
+  })
   
   
   # select_continuous_var <- reactive({input$select_continuous_var})
-  output$plot_single_cont_var <- renderPlot(aux_plot_continuous(input$select_continuous_var), height = 250)
-  output$plot_single_bin_var <- renderPlot(aux_plot_binary(input$select_binary_var), height = 250)
-  output$plot_single_disc_var <- renderPlot(aux_plot_discrete(input$select_discrete_var), height = 250)
+  output$plot_single_cont_var <- renderPlotly(aux_plot_continuous(X_train, input$select_continuous_var))
+  output$plot_single_bin_var <- renderPlotly(aux_plot_binary(X_train, input$select_binary_var))
   
-  output$plot_combined_var <- renderPlot(aux_plot_combined(input$comb_plot_continuous,
+  output$plot_combined_var <- renderPlotly(aux_plot_combined(X_train,
+                                                           input$comb_plot_continuous,
                                                            input$comb_plot_binary,
-                                                           input$comb_plot_type), width = 650)
+                                                           input$comb_plot_type))
   
 }
 
 shinyApp(ui = ui, server = server)
-

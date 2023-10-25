@@ -9,7 +9,7 @@ aux_plot_binary <- function (df, feature) {
     geom_col(fill='darkblue') +
     scale_y_continuous(labels = scales::percent_format(scale = 100)) +
     ggthemes::theme_fivethirtyeight() +
-    labs(title = glue::glue("Relative frequency of {snake_to_clean_names(feature)}"), x = feature, y = "Frequency") +
+    labs(title = glue::glue("Frequência relativa de {snake_to_clean_names(feature)}"), x = feature, y = "Frequência") +
     theme(
       panel.background = element_rect(fill = "#f5f5f5", colour = NA),
       plot.background = element_rect(fill = "#f5f5f5", colour = NA),
@@ -21,7 +21,7 @@ aux_plot_discrete <- function (df, feature) {
     geom_bar(fill='darkblue') +
     ggthemes::theme_fivethirtyeight() +
     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-    labs(title = glue::glue("Absolute frequency of {snake_to_clean_names(feature)}"), x = feature, y = "Frequency") +
+    labs(title = glue::glue("Frequência absoluta de {snake_to_clean_names(feature)}"), x = feature, y = "Frequência") +
     theme(
       panel.background = element_rect(fill = "#f5f5f5", colour = NA),
       plot.background = element_rect(fill = "#f5f5f5", colour = NA),
@@ -32,34 +32,64 @@ aux_plot_continuous <- function (df, feature) {
     ggplot(aes(x = .data[[feature]])) +
     geom_histogram(fill='darkblue') +
     ggthemes::theme_fivethirtyeight() +
-    labs(title = glue::glue("Histogram of {snake_to_clean_names(feature)}"), x = feature, y = "Frequency") +
+    labs(title = glue::glue("Histograma de {snake_to_clean_names(feature)}"), x = feature, y = "Frequência") +
     theme(
       panel.background = element_rect(fill = "#f5f5f5", colour = NA),
       plot.background = element_rect(fill = "#f5f5f5", colour = NA),
     ), height = 250)
 }
 
-aux_plot_combined <- function (df, continuous_var, binary_var, plot_type) {
-  print(plot_type)
-  g <- ggplot(df)
-  if (plot_type == "Histogram") {
-    g <- g + 
-      geom_histogram(aes(x = .data[[continuous_var]])) +
-      facet_wrap(~.data[[binary_var]])
-  } else if (plot_type == "Boxplot") {
-    g <- g + 
-      geom_boxplot(aes(group = factor(.data[[binary_var]]), y = .data[[continuous_var]]))
-  } else if (plot_type == "Violin") {
-    g <- g + 
-      geom_violin(aes(y = factor(.data[[binary_var]]), x = .data[[continuous_var]]))
-  }
-  ggplotly(g + labs(title = glue::glue("Plot of {continuous_var} according to {binary_var}")) +
+aux_plot_combined <- function (df, continuous_var) {
+  
+  df %>% 
+    ggplot(aes(x = .data[[continuous_var]], y = y)) +
+    geom_point() +
+    labs(title = glue::glue("{snake_to_clean_names(continuous_var)} versus y")) +
     ggthemes::theme_fivethirtyeight() +
     theme(
       panel.background = element_rect(fill = "#f5f5f5", colour = NA),
       plot.background = element_rect(fill = "#f5f5f5", colour = NA),
-    ), width = 650)
+    )
 }
+
+# aux_plot_combined <- function (df, continuous_var, continuous_var_break, plot_type) {
+#   print(plot_type)
+#   g <- df %>% 
+#     mutate(Quantile_var := ntile(!!sym(continuous_var_break), 4)) %>% 
+#     ggplot()
+#   if (plot_type == "Histograma") {
+#     g <- g +
+#       geom_histogram(aes(x = .data[[continuous_var]])) +
+#       facet_wrap(~Quantile_var)
+#   } else if (plot_type == "Boxplot") {
+#     g <- g +
+#       geom_boxplot(aes(group = factor(Quantile_var), y = .data[[continuous_var]]))
+#   } else if (plot_type == "Violino") {
+#     g <- g +
+#       geom_violin(aes(y = factor(Quantile_var), x = .data[[continuous_var]]))
+#   }
+#   g + labs(title = glue::glue("{snake_to_clean_names(continuous_var)} x quantis de {snake_to_clean_names(continuous_var_break)}"),
+#            x = glue::glue("Quantis de {snake_to_clean_names(continuous_var_break)}")) +
+#     ggthemes::theme_fivethirtyeight() +
+#     theme(
+#       panel.background = element_rect(fill = "#f5f5f5", colour = NA),
+#       plot.background = element_rect(fill = "#f5f5f5", colour = NA),
+#     )
+# }
+
+# aux_plot_combined <- function(df, var_x, var_y) {
+#   
+#   df %>% 
+#     slice_sample(prop = .4) %>% 
+#     ggplot(aes(x = .data[[var_x]], y = .data[[var_y]])) +
+#     geom_point() +
+#     ggthemes::theme_fivethirtyeight() +
+#     theme(
+#       panel.background = element_rect(fill = "#f5f5f5", colour = NA),
+#       plot.background = element_rect(fill = "#f5f5f5", colour = NA),
+#     ) + labs(title = glue::glue("Gráfico de {var_x} contra {var_y}"))
+#   
+# }
 
 plot_feat_imp <- function (model_name, feat_imp) {
   
@@ -72,7 +102,7 @@ plot_feat_imp <- function (model_name, feat_imp) {
     feat_imp <- feat_imp %>% 
       mutate(Importance = Importance / sum(Importance)) %>%
       dplyr::slice(1:10)
-    feat_imp <- feat_imp %>%  add_row(Feature = "Others", Importance = 1 - sum(feat_imp$Importance))
+    feat_imp <- feat_imp %>%  add_row(Feature = "Outros", Importance = 1 - sum(feat_imp$Importance))
     
   } else {
     feat_imp <- feat_imp %>% dplyr::slice(1:10)
@@ -92,7 +122,7 @@ plot_feat_imp <- function (model_name, feat_imp) {
     g <- g + scale_y_continuous(labels = scales::percent_format(scale = 100)) +
       labs(title = "Feature Importance", x = "Feature", y = "Importance (%)")
   } else {
-    g <- g + labs(title = "Absolute impact of features", x = "Feature", y = "Impact")
+    g <- g + labs(title = "Impacto absoluto das features", x = "Feature", y = "Impacto")
   }
   
   return(ggplotly(g))
@@ -188,7 +218,7 @@ auth_fun <- function () {
   user_base <- tibble(
     user = c("ITA-ICEA-LATAM", "1"),
     password = c("DSC2023", "1"),
-    password_hash = sapply(c("ITA-ICEA-LATAM", "1"), sodium::password_store),
+    password_hash = sapply(c("DSC2023", "1"), sodium::password_store),
     permissions = c("standard", "standard"),
     name = c("Organizadores", "TESTE")
   )
@@ -232,9 +262,9 @@ auth_fun <- function () {
     hideTab(inputId = "tab_selected", target = "Tabelas")
     
     if (credentials()$user_auth) {
-      showTab(inputId = "tab_selected", target = "Modelos")
       showTab(inputId = "tab_selected", target = "Descritivas")
       showTab(inputId = "tab_selected", target = "Tabelas")
+      showTab(inputId = "tab_selected", target = "Modelos")
     }
   })
   

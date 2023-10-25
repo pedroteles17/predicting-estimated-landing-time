@@ -23,15 +23,15 @@ library(rpart)
 library(broom)
 
 source("99_functions.R")
-
+# aux_plot_combined2(X_train %>% mutate(y = y_train) %>% drop_na(y), "wind_speed")
 
 # 1. Auxiliar function to run model
 
-X_train <- arrow::read_parquet("data/pseudoX_train.parquet")
-y_train <- arrow::read_parquet("data/pseudoy_train.parquet")[["excess_seconds_flying"]]
+X_train <- arrow::read_parquet("data/sample_X_train.parquet")
+y_train <- arrow::read_parquet("data/sample_y_train.parquet")[["excess_seconds_flying"]]
 
-X_test <- arrow::read_parquet("data/pseudoX_test.parquet")
-y_test <- arrow::read_parquet("data/pseudoy_test.parquet")[["excess_seconds_flying"]]
+X_test <- arrow::read_parquet("data/sample_X_test.parquet")
+y_test <- arrow::read_parquet("data/sample_y_test.parquet")[["excess_seconds_flying"]]
 
 invoke_model <- function(model_name, ...) {
   
@@ -195,9 +195,10 @@ ui <- dashboardPage(
     tabsetPanel(
       type = "tabs",
       id = "tab_selected",
-      tabPanel(title = "Modelos"),
+      selected = "Descritivas",
       tabPanel(title = "Descritivas"),
-      tabPanel(title = "Tabelas")
+      tabPanel(title = "Tabelas"),
+      tabPanel(title = "Modelos"),
     ),
     
     uiOutput("body")
@@ -210,7 +211,7 @@ ui <- dashboardPage(
 server <- function(input, output, session) {
   
   waiter_obj <- Waiter$new(id = "dashboard_body",
-                           html = tagList(spin_ellipsis(), h4("Fitting model. This sould take some seconds.")))
+                           html = tagList(spin_ellipsis(), h4("Ajustando modelo. Isso deve levar alguns segundos.")))
   
   credentials <- auth_fun()
   
@@ -220,7 +221,7 @@ server <- function(input, output, session) {
   output$which_model <- renderUI({
     selectInput(
       inputId = "which_model",
-      label = "Which model?",
+      label = "Qual modelo?",
       choices = c("Linear Regression", "Ridge Regression", "XGBoost", "LightGBM", "Decision Tree"),
       selected = "LightGBM"
     )
@@ -238,7 +239,7 @@ server <- function(input, output, session) {
       NULL
     } else if (input$which_model == "Decision Tree"){
       div(
-        numericInput(inputId = "max_depth", label = "Maximum depth of tree", value = 6, step = 1, min = 2),
+        numericInput(inputId = "max_depth", label = "Profundidade máx. da árvore", value = 6, step = 1, min = 2),
       )
     } else if (input$which_model == "Ridge Regression") {
       div(
@@ -247,15 +248,15 @@ server <- function(input, output, session) {
     } else if (input$which_model == "XGBoost") { # I'm having some trobule with XGBoost's max depth
       div(
         numericInput(inputId = "learning_rate", label = "Learning Rate", value = 0.1, step = 0.01),
-        numericInput(inputId = "num_leaves", label = "Maximum number of leaves", value = 31, step = 1),
-        numericInput(inputId = "n_estimators", label = "Number of trees to fit", value = 100, step = 1)
+        numericInput(inputId = "num_leaves", label = "Número max. de folhas", value = 31, step = 1),
+        numericInput(inputId = "n_estimators", label = "Número de árvores", value = 100, step = 1)
       )
     } else {
       div(
         numericInput(inputId = "learning_rate", label = "Learning Rate", value = 0.1, step = 0.01),
-        numericInput(inputId = "num_leaves", label = "Maximum number of leaves", value = 31, step = 1),
-        numericInput(inputId = "max_depth", label = "Maximum depth of tree (negative for no limit)", value = -1, step = 1, min = -1),
-        numericInput(inputId = "n_estimators", label = "Number of trees to fit", value = 100, step = 1)
+        numericInput(inputId = "num_leaves", label = "Número max. de folhas", value = 10, step = 1),
+        numericInput(inputId = "max_depth", label = "Profundidade máx. da árvore (negativo = sem limite)", value = 10, step = 1, min = -1),
+        numericInput(inputId = "n_estimators", label = "Número de árvores", value = 10, step = 1)
       )
     }
   })
@@ -264,7 +265,7 @@ server <- function(input, output, session) {
   ## 2.3. Run Model ----
   output$run_model <- renderUI({
     actionButton(inputId = "run_model",
-                 label = "Run Model"
+                 label = "Rodar modelo"
     )
   })
   
@@ -287,10 +288,12 @@ server <- function(input, output, session) {
           uiOutput("run_model"),
           br(),
           div(style = "font-size: 10px;",
-              "Models should take just some seconds to run, but higher values for the hyperparameters will naturally increase the required time.")
-      )
+              "Os modelos devem levar apenas alguns segundos para rodar, mas, naturalmente, valores maiores para os hiperparâmetros acima aumentarão o tempo gasto.")
+      )} else {
+        NULL
+      }
       
-    }
+    
   })
   
   output$body <- renderUI({
@@ -310,27 +313,33 @@ server <- function(input, output, session) {
              
              column(width = 6, align = "center",
                     
-                    fluidRow(selectInput(inputId = "select_continuous_var", label = "Plot of continuous variable",
+                    fluidRow(selectInput(inputId = "select_continuous_var", label = "Gráfico de variável contínua",
                                          choices = desc_variables$Continuous, selected = "temperature"),
                              plotlyOutput("plot_single_cont_var", height = "270px")),
                     
-                    fluidRow(div(h4("Grouped plot"),
-                                 selectInput(inputId = "comb_plot_continuous", label = "Choose a continuous variable", choices = desc_variables$Continuous),
-                                 selectInput(inputId = "comb_plot_binary", label = "Choose a binary variable", choices = desc_variables$Binary),
-                                 selectInput(inputId = "comb_plot_type", label = "Choose the plot's type", choices = c("Histogram", "Violin", "Boxplot"))
-                    ))),
+                    fluidRow(div(h4("Variável contínua x contra target"),
+                                 selectInput(inputId = "comb_plot_continuous", label = "Variável contínua", choices = desc_variables$Continuous)
+                    )),
+                    # 
+                    # fluidRow(div(h4("Gráfico com duas variáveis"),
+                    #              selectInput(inputId = "comb_plot_x", label = "Variável do eixo x", choices = desc_variables$Continuous),
+                    #              selectInput(inputId = "comb_plot_y", label = "Variável do eixo y", choices = desc_variables$Continuous),
+                    #              plotOutput("plot_combined_var", height = "270px")
+                    # ))
+                  ),
              
              column(width = 6, align = "center",
                     
-                    selectInput(inputId = "select_binary_var", label = "Plot of binary variable",
+                    selectInput(inputId = "select_binary_var", label = "Gráfico de variável binária",
                                 choices = desc_variables$Binary, selected = "tcr"),
-                    plotlyOutput("plot_single_bin_var", height = "270px")
+                    plotlyOutput("plot_single_bin_var", height = "270px"),
+                    plotOutput("plot_combined_var", height = "270px")
              )
       )
     } else {
       
       div(align = "center",
-          h2("Stats", align = "center"),
+          h2("Estatísticas", align = "center"),
           DTOutput("table_stats")
       )
       
@@ -340,12 +349,12 @@ server <- function(input, output, session) {
   })
   
   # 4.0 UI Body
-  rmse_table_data <- reactiveVal(tibble(Model = character(0),
-                                        Name = character(0), 
+  rmse_table_data <- reactiveVal(tibble(Modelo = character(0),
+                                        Nome = character(0), 
                                         `Learning Rate` = numeric(0),
-                                        `Num Leaves` = numeric(0),
-                                        `Max Depth` = numeric(0),
-                                        `Num Estimators` = numeric(0),
+                                        `Num Folhas` = numeric(0),
+                                        `Max Profundidade` = numeric(0),
+                                        `Num Estimadores` = numeric(0),
                                         RMSE = numeric(0)))
   observeEvent(input$run_model, {
     
@@ -397,13 +406,13 @@ server <- function(input, output, session) {
     
     # RMSE table
     rmse_table_data() %>% 
-      mutate(Model = "Previous") %>% 
-      add_row(Model = "Current",
-              Name = input$which_model, 
+      mutate(Modelo = "Anterior") %>% 
+      add_row(Modelo = "Atual",
+              Nome = input$which_model, 
               `Learning Rate` = learning_rate,
-              `Num Leaves` = num_leaves,
-              `Max Depth` = max_depth,
-              `Num Estimators` = num_estimators,
+              `Num Folhas` = num_leaves,
+              `Max Profundidade` = max_depth,
+              `Num Estimadores` = num_estimators,
               RMSE = round(model_rmse, 2),
               .before = 1) %>% 
       rmse_table_data()
@@ -426,11 +435,11 @@ server <- function(input, output, session) {
   output$plot_single_cont_var <- renderPlotly(aux_plot_continuous(X_train, input$select_continuous_var))
   output$plot_single_bin_var <- renderPlotly(aux_plot_binary(X_train, input$select_binary_var))
   
-  output$plot_combined_var <- renderPlotly(aux_plot_combined(X_train,
-                                                           input$comb_plot_continuous,
-                                                           input$comb_plot_binary,
-                                                           input$comb_plot_type))
+  output$plot_combined_var <- renderPlot(aux_plot_combined(X_train %>% mutate(y = y_train) %>% drop_na(y),
+                                                           input$comb_plot_continuous))
+  # output$plot_combined_var <- renderPlot(aux_plot_combined(X_train, input$comb_plot_x, input$comb_plot_y))
   
 }
 
 shinyApp(ui = ui, server = server)
+

@@ -35,7 +35,7 @@
 
 # Data Availability Statement
 
-All the parquet files used to suport the findings of this study have been deposited in the `data` folder. However, by uncommenting the code in the `01_fetch_clean_data.py` script, the data can be fetched directly from the API.
+All the parquet files were previously available in the data folder on GitHub. However, they have been removed due to GitHub's file size limitations. If you need access to these files, please contact mailto:pedroteles17@gmail.com. Additionally, the data can be fetched directly from the API by uncommenting the code in the `01_fetch_clean_data.py script`.
 
 # Computational Requirements
 
